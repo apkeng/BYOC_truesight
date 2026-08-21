@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/ca
 
 const SECTIONS = [
   { href: "/admin/users", title: "Users", description: "Invite users and manage roles" },
+  { href: "/admin/import", title: "Data Import", description: "Bulk create or update records from a spreadsheet" },
   { href: "/admin/custom-fields", title: "Custom Fields", description: "Add fields per object" },
   { href: "/admin/picklists", title: "Picklists", description: "Manage picklist values and defaults" },
   { href: "/admin/field-permissions", title: "Field Permissions", description: "Control what sales users can edit" },
