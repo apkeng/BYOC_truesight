@@ -208,6 +208,7 @@ export function RecordForm({
                 field={cf}
                 value={customValues[cf.id]}
                 onChange={(v) => setCustomValues((prev) => ({ ...prev, [cf.id]: v }))}
+                picklistOptions={picklists[cf.field_name] || []}
               />
             </div>
           ))}
@@ -363,10 +364,12 @@ function CustomFieldInput({
   field,
   value,
   onChange,
+  picklistOptions,
 }: {
   field: CustomField;
   value: unknown;
   onChange: (v: unknown) => void;
+  picklistOptions: PicklistValue[];
 }) {
   if (field.field_type === "number") {
     return (
@@ -384,9 +387,9 @@ function CustomFieldInput({
           <SelectValue placeholder="Select..." />
         </SelectTrigger>
         <SelectContent>
-          {(field.picklist_values || []).map((opt) => (
-            <SelectItem key={opt} value={opt}>
-              {opt}
+          {picklistOptions.map((opt) => (
+            <SelectItem key={opt.id} value={opt.value}>
+              {opt.value}
             </SelectItem>
           ))}
         </SelectContent>
