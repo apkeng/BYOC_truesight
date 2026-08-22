@@ -64,6 +64,31 @@ export interface Workflow {
   active: boolean;
 }
 
+export interface EmailTemplate {
+  id: string;
+  object_name: string;
+  name: string;
+  subject: string;
+  body: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmailLog {
+  id: string;
+  template_id: string | null;
+  object_name: string;
+  record_id: string;
+  to_email: string;
+  subject: string;
+  body: string;
+  sent_by: string | null;
+  status: string;
+  error: string | null;
+  sent_at: string;
+}
+
 export interface AppNotification {
   id: string;
   user_id: string;

@@ -13,7 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { addPicklistValue, deletePicklistValue, setDefaultPicklistValue } from "./actions";
+import {
+  addPicklistValue,
+  deletePicklistValue,
+  movePicklistValue,
+  setDefaultPicklistValue,
+} from "./actions";
 import type { PicklistValue } from "@/lib/types";
 
 export function PicklistManager({
@@ -71,6 +76,14 @@ export function PicklistManager({
     });
   }
 
+  function move(id: string, fName: string, direction: "up" | "down") {
+    startTransition(async () => {
+      const result = await movePicklistValue(id, objectName, fName, direction);
+      if (!result.success) toast.error(result.error || "Failed to reorder");
+      else router.refresh();
+    });
+  }
+
   return (
     <div className="space-y-8">
       <form onSubmit={add} className="flex items-end gap-3">
@@ -98,30 +111,52 @@ export function PicklistManager({
         </Button>
       </form>
 
-      {picklistFieldNames.map((fName) => (
-        <div key={fName}>
-          <h3 className="mb-2 text-sm font-medium">{fName}</h3>
-          <div className="flex flex-wrap gap-2">
-            {(grouped[fName] || []).map((v) => (
-              <Badge
-                key={v.id}
-                variant={v.is_default ? "default" : "secondary"}
-                className="cursor-pointer gap-2 py-1.5"
-              >
-                <span onClick={() => setDefault(v.id, fName)}>
-                  {v.value} {v.is_default && "★"}
-                </span>
-                <button onClick={() => remove(v.id)} className="opacity-70 hover:opacity-100">
-                  ×
-                </button>
-              </Badge>
-            ))}
-            {(grouped[fName] || []).length === 0 && (
-              <span className="text-sm text-muted-foreground">No values yet.</span>
-            )}
+      {picklistFieldNames.map((fName) => {
+        const fieldValues = grouped[fName] || [];
+        return (
+          <div key={fName}>
+            <h3 className="mb-2 text-sm font-medium">{fName}</h3>
+            <div className="flex flex-col gap-1.5">
+              {fieldValues.map((v, i) => (
+                <div key={v.id} className="flex items-center gap-1.5">
+                  <div className="flex flex-col">
+                    <button
+                      onClick={() => move(v.id, fName, "up")}
+                      disabled={isPending || i === 0}
+                      className="leading-none disabled:opacity-30"
+                      aria-label={`Move ${v.value} up`}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      onClick={() => move(v.id, fName, "down")}
+                      disabled={isPending || i === fieldValues.length - 1}
+                      className="leading-none disabled:opacity-30"
+                      aria-label={`Move ${v.value} down`}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                  <Badge
+                    variant={v.is_default ? "default" : "secondary"}
+                    className="cursor-pointer gap-2 py-1.5"
+                  >
+                    <span onClick={() => setDefault(v.id, fName)}>
+                      {v.value} {v.is_default && "★"}
+                    </span>
+                    <button onClick={() => remove(v.id)} className="opacity-70 hover:opacity-100">
+                      ×
+                    </button>
+                  </Badge>
+                </div>
+              ))}
+              {fieldValues.length === 0 && (
+                <span className="text-sm text-muted-foreground">No values yet.</span>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

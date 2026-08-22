@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { RecordForm } from "@/components/record-form";
 import { DeleteRecordButton } from "@/components/delete-record-button";
-import type { Profile } from "@/lib/types";
+import { SendLeadEmailButton } from "./send-lead-email-button";
+import type { EmailTemplate, Profile } from "@/lib/types";
 
 export default async function RecordDetailPage({
   params,
@@ -32,13 +33,28 @@ export default async function RecordDetailPage({
 
   const title = def.titleField ? (record[def.titleField] as string) : `${def.label} ${id.slice(0, 8)}`;
 
+  let emailTemplates: EmailTemplate[] = [];
+  if (objectKey === "leads") {
+    const { data } = await supabase
+      .from("email_templates")
+      .select("*")
+      .eq("object_name", "leads")
+      .order("name");
+    emailTemplates = (data as EmailTemplate[]) || [];
+  }
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{title || "(untitled)"}</h1>
-        {(profile as Profile).role === "admin" && (
-          <DeleteRecordButton objectKey={objectKey} id={id} label={def.label} />
-        )}
+        <div className="flex items-center gap-2">
+          {objectKey === "leads" && (
+            <SendLeadEmailButton leadId={id} record={record} templates={emailTemplates} />
+          )}
+          {(profile as Profile).role === "admin" && (
+            <DeleteRecordButton objectKey={objectKey} id={id} label={def.label} />
+          )}
+        </div>
       </div>
       <RecordForm
         objectKey={objectKey}
