@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LookupField } from "@/components/lookup-field";
+import { ReadonlyLookupLabel } from "@/components/field-value-display";
 
 export function RecordForm({
   objectKey,
@@ -327,37 +328,6 @@ function FieldInput({
       disabled={readonly}
     />
   );
-}
-
-function ReadonlyLookupLabel({
-  table,
-  labelField,
-  id,
-}: {
-  table: string;
-  labelField: string;
-  id: string | null;
-}) {
-  const [label, setLabel] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!id) {
-      setLabel(null);
-      return;
-    }
-    const supabase = createClient();
-    supabase
-      .from(table)
-      .select(labelField)
-      .eq("id", id)
-      .maybeSingle()
-      .then(({ data }) => {
-        const row = data as Record<string, unknown> | null;
-        setLabel((row?.[labelField] as string) || null);
-      });
-  }, [table, labelField, id]);
-
-  return <p className="text-sm text-muted-foreground">{id ? label ?? "…" : "—"}</p>;
 }
 
 function CustomFieldInput({

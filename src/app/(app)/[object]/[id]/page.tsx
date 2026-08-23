@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { RecordForm } from "@/components/record-form";
+import { FieldViewPanel } from "@/components/field-view-panel";
 import { DeleteRecordButton } from "@/components/delete-record-button";
 import { SendLeadEmailButton } from "./send-lead-email-button";
 import type { EmailTemplate, Profile } from "@/lib/types";
@@ -56,12 +57,17 @@ export default async function RecordDetailPage({
           )}
         </div>
       </div>
-      <RecordForm
-        objectKey={objectKey}
-        mode="edit"
-        record={record}
-        role={(profile as Profile).role}
-      />
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <div className="flex-1">
+          <RecordForm
+            objectKey={objectKey}
+            mode="edit"
+            record={record}
+            role={(profile as Profile).role}
+          />
+        </div>
+        <FieldViewPanel objectKey={objectKey} record={record} />
+      </div>
     </div>
   );
 }

@@ -89,6 +89,14 @@ export interface EmailLog {
   sent_at: string;
 }
 
+export interface UserFieldView {
+  id: string;
+  user_id: string;
+  object_name: string;
+  fields: string[];
+  updated_at: string;
+}
+
 export interface AppNotification {
   id: string;
   user_id: string;
