@@ -268,7 +268,7 @@ function FieldInput({
   }
   if (field.type === "picklist") {
     return (
-      <Select value={(value as string) || undefined} onValueChange={onChange} disabled={readonly}>
+      <Select value={(value as string) || ""} onValueChange={onChange} disabled={readonly}>
         <SelectTrigger className="w-full">
           <SelectValue placeholder="Select..." />
         </SelectTrigger>
@@ -352,7 +352,7 @@ function CustomFieldInput({
   }
   if (field.field_type === "picklist") {
     return (
-      <Select value={(value as string) || undefined} onValueChange={onChange}>
+      <Select value={(value as string) || ""} onValueChange={onChange}>
         <SelectTrigger className="w-full">
           <SelectValue placeholder="Select..." />
         </SelectTrigger>
