@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { updateProfileRole } from "./actions";
+import { ResetPasswordDialog } from "./reset-password-dialog";
 import type { Profile, UserRole } from "@/lib/types";
 
 export function UserRow({ profile }: { profile: Profile }) {
@@ -42,6 +43,9 @@ export function UserRow({ profile }: { profile: Profile }) {
             <SelectItem value="admin">admin</SelectItem>
           </SelectContent>
         </Select>
+      </TableCell>
+      <TableCell>
+        <ResetPasswordDialog profile={profile} />
       </TableCell>
     </TableRow>
   );
