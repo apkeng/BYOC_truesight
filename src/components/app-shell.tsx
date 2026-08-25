@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Shield, ChevronRight, LogOut, KeyRound } from "lucide-react";
+import { Shield, ChevronRight, LogOut, KeyRound, ListChecks } from "lucide-react";
 import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { NAV_SECTIONS, sectionForObject } from "@/lib/nav";
 import { NotificationsBell } from "@/components/notifications-bell";
@@ -88,6 +88,18 @@ export function AppShell({
           ))}
         </nav>
 
+        <Link
+          href="/lead-lists"
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-sidebar-accent",
+            pathname?.startsWith("/lead-lists")
+              ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+              : "text-sidebar-foreground"
+          )}
+        >
+          <ListChecks className="size-4" /> Lead List
+        </Link>
+
         {profile.role === "admin" && (
           <Link
             href="/admin"
@@ -160,7 +172,11 @@ export function AppShell({
               </>
             ) : (
               <span className="font-medium text-foreground">
-                {pathname?.startsWith("/admin") ? "Admin" : "Dashboard"}
+                {pathname?.startsWith("/admin")
+                  ? "Admin"
+                  : pathname?.startsWith("/lead-lists")
+                    ? "Lead Lists"
+                    : "Dashboard"}
               </span>
             )}
           </div>

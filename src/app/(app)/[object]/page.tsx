@@ -10,6 +10,12 @@ import { EntityAvatar } from "@/components/entity-avatar";
 import { StatusPill } from "@/components/status-pill";
 import { OwnerAvatar } from "@/components/owner-avatar";
 import { StageFilterTabs } from "@/components/stage-filter-tabs";
+import { LeadFilter, type CreatedByFilter, type RangeFilter } from "@/components/lead-filter";
+import {
+  LeadSelectionProvider,
+  LeadRowCheckbox,
+  LeadSelectAllCheckbox,
+} from "@/components/lead-selection";
 import {
   Table,
   TableBody,
@@ -20,25 +26,39 @@ import {
 } from "@/components/ui/table";
 
 const PAGE_SIZE = 25;
+const RANGE_DAYS: Record<Exclude<RangeFilter, "all">, number> = { "1d": 1, "7d": 7, "30d": 30 };
+
+function sinceIso(range: Exclude<RangeFilter, "all">) {
+  return new Date(Date.now() - RANGE_DAYS[range] * 24 * 60 * 60 * 1000).toISOString();
+}
 
 export default async function ObjectListPage({
   params,
   searchParams,
 }: {
   params: Promise<{ object: string }>;
-  searchParams: Promise<{ q?: string; page?: string; status?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; status?: string; createdBy?: string; range?: string }>;
 }) {
   const { object } = await params;
   if (!isObjectKey(object)) notFound();
   const objectKey = object as ObjectKey;
   const def = OBJECTS[objectKey];
+  const isLeads = objectKey === "leads";
 
-  const { q, page: pageParam, status } = await searchParams;
+  const { q, page: pageParam, status, createdBy: createdByParam, range: rangeParam } = await searchParams;
   const page = Math.max(1, Number(pageParam) || 1);
   const from = (page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
+  // Leads default to "created by me, last 24 hours" until the user picks a different filter.
+  const createdBy: CreatedByFilter = createdByParam === "all" ? "all" : "me";
+  const range: RangeFilter =
+    rangeParam === "7d" || rangeParam === "30d" || rangeParam === "all" ? rangeParam : "1d";
+
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const searchField =
     def.titleField ||
@@ -48,6 +68,12 @@ export default async function ObjectListPage({
     let query = supabase.from(def.table).select("*", { count: "exact" });
     if (q && searchField) query = query.ilike(searchField, `%${q}%`);
     if (status && def.statusField) query = query.eq(def.statusField, status);
+    if (isLeads) {
+      if (createdBy === "me" && user) query = query.eq("created_by", user.id);
+      if (range !== "all") {
+        query = query.gte("created_date", sinceIso(range));
+      }
+    }
     return query;
   }
 
@@ -79,11 +105,25 @@ export default async function ObjectListPage({
     (rows as Record<string, unknown>[]) || []
   );
 
+  let userLists: { id: string; name: string }[] = [];
+  if (isLeads && user) {
+    const { data } = await supabase
+      .from("lead_lists")
+      .select("id, name")
+      .eq("created_by", user.id)
+      .order("created_date", { ascending: false });
+    userLists = data || [];
+  }
+
   const totalPages = Math.max(1, Math.ceil((count || 0) / PAGE_SIZE));
   const qsBase = (p: number) => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (status) params.set("status", status);
+    if (isLeads) {
+      params.set("createdBy", createdBy);
+      params.set("range", range);
+    }
     params.set("page", String(p));
     return `/${objectKey}?${params.toString()}`;
   };
@@ -121,10 +161,22 @@ export default async function ObjectListPage({
         </div>
       )}
 
+      {isLeads && (
+        <div className="mb-4 flex items-center justify-end">
+          <LeadFilter basePath={`/${objectKey}`} q={q} createdBy={createdBy} range={range} />
+        </div>
+      )}
+
+      <LeadSelectionProvider lists={userLists}>
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
+              {isLeads && (
+                <TableHead className="h-11 w-10 pl-4">
+                  <LeadSelectAllCheckbox ids={(rows as Record<string, unknown>[] | null)?.map((r) => r.id as string) || []} />
+                </TableHead>
+              )}
               {def.listColumns.map((col, i) => {
                 const field = def.fields.find((f) => f.name === col);
                 const numeric = field?.type === "number";
@@ -132,7 +184,7 @@ export default async function ObjectListPage({
                   <TableHead
                     key={col}
                     className={`h-11 text-xs font-medium tracking-wider text-muted-foreground uppercase ${
-                      i === 0 ? "pl-4" : ""
+                      i === 0 && !isLeads ? "pl-4" : ""
                     } ${numeric ? "text-right" : ""}`}
                   >
                     {field?.label || col}
@@ -145,7 +197,7 @@ export default async function ObjectListPage({
             {(rows || []).length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={def.listColumns.length}
+                  colSpan={def.listColumns.length + (isLeads ? 1 : 0)}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No records yet.
@@ -159,12 +211,17 @@ export default async function ObjectListPage({
 
               return (
                 <TableRow key={row.id as string}>
+                  {isLeads && (
+                    <TableCell className="py-3 pl-4">
+                      <LeadRowCheckbox id={row.id as string} />
+                    </TableCell>
+                  )}
                   {def.listColumns.map((col, i) => {
                     const field = def.fields.find((f) => f.name === col);
 
                     if (i === 0) {
                       return (
-                        <TableCell key={col} className="py-3 pl-4">
+                        <TableCell key={col} className={`py-3 ${isLeads ? "" : "pl-4"}`}>
                           <Link
                             href={`/${objectKey}/${row.id}`}
                             className="flex items-center gap-3 whitespace-normal"
@@ -264,6 +321,7 @@ export default async function ObjectListPage({
           </div>
         </div>
       </div>
+      </LeadSelectionProvider>
     </div>
   );
 }
