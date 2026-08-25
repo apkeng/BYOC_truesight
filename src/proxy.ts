@@ -30,8 +30,12 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isLoginRoute = request.nextUrl.pathname.startsWith("/login");
+  // /auth/* routes (e.g. set-password) must stay reachable while signed out —
+  // that's exactly the state an invite/recovery link lands the user in before
+  // its access_token hash is processed client-side.
+  const isPublicAuthRoute = isLoginRoute || request.nextUrl.pathname.startsWith("/auth/");
 
-  if (!user && !isLoginRoute) {
+  if (!user && !isPublicAuthRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

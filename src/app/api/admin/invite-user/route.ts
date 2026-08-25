@@ -26,8 +26,10 @@ export async function POST(request: Request) {
   }
 
   const admin = createAdminClient();
+  const origin = new URL(request.url).origin;
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
     data: { full_name: fullName || null, role },
+    redirectTo: `${origin}/auth/set-password`,
   });
 
   if (error) {
