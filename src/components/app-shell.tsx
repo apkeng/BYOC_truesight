@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Shield, ChevronRight, LogOut } from "lucide-react";
+import { Shield, ChevronRight, LogOut, KeyRound } from "lucide-react";
 import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { NAV_SECTIONS, sectionForObject } from "@/lib/nav";
 import { NotificationsBell } from "@/components/notifications-bell";
@@ -13,6 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ChangePasswordDialog } from "@/components/change-password-dialog";
 import { signOut } from "@/app/login/actions";
 import { avatarColorForId, initials } from "@/lib/badge-colors";
 import { cn } from "@/lib/utils";
@@ -30,6 +32,7 @@ export function AppShell({
   const pathname = usePathname();
   const firstSegment = pathname?.split("/")[1] || "";
   const currentObject: ObjectKey | null = isObjectKey(firstSegment) ? firstSegment : null;
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   return (
     <div className="flex min-h-screen w-full bg-background">
@@ -123,6 +126,9 @@ export function AppShell({
             </div>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuItem onClick={() => setChangePasswordOpen(true)}>
+              <KeyRound /> Change password
+            </DropdownMenuItem>
             <DropdownMenuItem
               variant="destructive"
               render={<form action={signOut} />}
@@ -133,6 +139,12 @@ export function AppShell({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <ChangePasswordDialog
+          email={profile.email}
+          open={changePasswordOpen}
+          onOpenChange={setChangePasswordOpen}
+        />
       </aside>
 
       <div className="flex flex-1 flex-col">
