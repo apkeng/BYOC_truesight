@@ -4,13 +4,17 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { runWorkflows } from "@/lib/workflows";
-import { OBJECTS, isObjectKey, type FieldDef } from "@/lib/objects";
+import { saveCustomFieldValues } from "@/lib/record-actions";
+import { OBJECTS, isObjectKey, type FieldDef, type ObjectKey } from "@/lib/objects";
+import type { CustomField } from "@/lib/types";
 
 export interface ImportRow {
   /** existing record id to update; null/empty to create a new record */
   id: string | null;
   /** field name -> raw cell value, already limited to mapped fields */
   values: Record<string, unknown>;
+  /** custom_field id -> raw cell value, already limited to mapped custom fields */
+  customValues?: Record<string, unknown>;
 }
 
 export interface ImportRowNote {
@@ -59,6 +63,13 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
   );
   const lookupLabelMaps = await buildLookupLabelMaps(supabase, def.fields, rows);
 
+  const { data: customFieldsData } = await supabase
+    .from("custom_fields")
+    .select("*")
+    .eq("object_name", def.table);
+  const customFields = new Map(((customFieldsData as CustomField[]) || []).map((f) => [f.id, f]));
+  const customLookupMaps = await buildCustomLookupLabelMaps(supabase, customFields, rows);
+
   let created = 0;
   let updated = 0;
   let failed = 0;
@@ -84,6 +95,15 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
         if (warning) warnings.push(warning);
       }
 
+      const customPayload: Record<string, unknown> = {};
+      for (const [customFieldId, rawValue] of Object.entries(row.customValues || {})) {
+        const field = customFields.get(customFieldId);
+        if (!field) continue;
+        const { value, warning } = coerceCustomValue(field, rawValue, customLookupMaps.get(customFieldId));
+        customPayload[customFieldId] = value;
+        if (warning) warnings.push(warning);
+      }
+
       if (id) {
         if (!UUID_RE.test(id)) {
           notes.push({ row: rowNum, level: "error", message: `Invalid record ID "${id}"` });
@@ -103,6 +123,9 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
           failed++;
           continue;
         }
+        if (Object.keys(customPayload).length > 0) {
+          await saveCustomFieldValues(objectKey, id, customPayload);
+        }
         await runWorkflows(supabase, def.table, data);
         updated++;
         for (const w of warnings) notes.push({ row: rowNum, level: "warning", message: w });
@@ -120,6 +143,9 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
           notes.push({ row: rowNum, level: "error", message: error?.message || "Insert failed" });
           failed++;
           continue;
+        }
+        if (Object.keys(customPayload).length > 0) {
+          await saveCustomFieldValues(objectKey, data.id, customPayload);
         }
         await runWorkflows(supabase, def.table, data);
         created++;
@@ -229,6 +255,62 @@ async function buildLookupLabelMaps(
       if (typeof label === "string" && label) map.set(label.trim().toLowerCase(), r.id as string);
     }
     result.set(field.name, map);
+  }
+
+  return result;
+}
+
+function coerceCustomValue(
+  field: CustomField,
+  raw: unknown,
+  lookupMap: Map<string, string> | undefined
+): { value: unknown; warning?: string } {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return { value: null };
+  }
+
+  switch (field.field_type) {
+    case "number": {
+      const n = Number(raw);
+      return Number.isFinite(n)
+        ? { value: n }
+        : { value: null, warning: `"${raw}" is not a number for ${field.field_label}` };
+    }
+    case "lookup": {
+      const str = String(raw).trim();
+      if (UUID_RE.test(str)) return { value: str };
+      const resolved = lookupMap?.get(str.toLowerCase());
+      if (resolved) return { value: resolved };
+      return { value: null, warning: `Could not match "${str}" to a ${field.field_label}` };
+    }
+    default:
+      return { value: String(raw) };
+  }
+}
+
+async function buildCustomLookupLabelMaps(
+  supabase: SupabaseClient,
+  customFields: Map<string, CustomField>,
+  rows: ImportRow[]
+): Promise<Map<string, Map<string, string>>> {
+  const usedFieldIds = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row.customValues || {})) usedFieldIds.add(key);
+  }
+
+  const result = new Map<string, Map<string, string>>();
+
+  for (const field of customFields.values()) {
+    if (field.field_type !== "lookup" || !usedFieldIds.has(field.id) || !field.lookup_object) continue;
+    const table = OBJECTS[field.lookup_object as ObjectKey]?.table;
+    if (!table) continue;
+    const { data } = await supabase.from(table).select("id, name").limit(5000);
+    const map = new Map<string, string>();
+    for (const r of (data as unknown as Record<string, unknown>[]) || []) {
+      const label = r.name;
+      if (typeof label === "string" && label) map.set(label.trim().toLowerCase(), r.id as string);
+    }
+    result.set(field.id, map);
   }
 
   return result;

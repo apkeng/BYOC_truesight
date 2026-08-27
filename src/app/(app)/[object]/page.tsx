@@ -12,10 +12,10 @@ import { OwnerAvatar } from "@/components/owner-avatar";
 import { StageFilterTabs } from "@/components/stage-filter-tabs";
 import { LeadFilter, type CreatedByFilter, type RangeFilter } from "@/components/lead-filter";
 import {
-  LeadSelectionProvider,
-  LeadRowCheckbox,
-  LeadSelectAllCheckbox,
-} from "@/components/lead-selection";
+  RecordSelectionProvider,
+  RecordRowCheckbox,
+  RecordSelectAllCheckbox,
+} from "@/components/record-selection";
 import {
   Table,
   TableBody,
@@ -167,25 +167,28 @@ export default async function ObjectListPage({
         </div>
       )}
 
-      <LeadSelectionProvider lists={userLists}>
+      <RecordSelectionProvider
+        objectKey={objectKey}
+        objectLabel={def.label}
+        objectLabelPlural={def.labelPlural}
+        lists={userLists}
+      >
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              {isLeads && (
-                <TableHead className="h-11 w-10 pl-4">
-                  <LeadSelectAllCheckbox ids={(rows as Record<string, unknown>[] | null)?.map((r) => r.id as string) || []} />
-                </TableHead>
-              )}
-              {def.listColumns.map((col, i) => {
+              <TableHead className="h-11 w-10 pl-4">
+                <RecordSelectAllCheckbox ids={(rows as Record<string, unknown>[] | null)?.map((r) => r.id as string) || []} />
+              </TableHead>
+              {def.listColumns.map((col) => {
                 const field = def.fields.find((f) => f.name === col);
                 const numeric = field?.type === "number";
                 return (
                   <TableHead
                     key={col}
                     className={`h-11 text-xs font-medium tracking-wider text-muted-foreground uppercase ${
-                      i === 0 && !isLeads ? "pl-4" : ""
-                    } ${numeric ? "text-right" : ""}`}
+                      numeric ? "text-right" : ""
+                    }`}
                   >
                     {field?.label || col}
                   </TableHead>
@@ -197,7 +200,7 @@ export default async function ObjectListPage({
             {(rows || []).length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={def.listColumns.length + (isLeads ? 1 : 0)}
+                  colSpan={def.listColumns.length + 1}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No records yet.
@@ -211,17 +214,15 @@ export default async function ObjectListPage({
 
               return (
                 <TableRow key={row.id as string}>
-                  {isLeads && (
-                    <TableCell className="py-3 pl-4">
-                      <LeadRowCheckbox id={row.id as string} />
-                    </TableCell>
-                  )}
+                  <TableCell className="py-3 pl-4">
+                    <RecordRowCheckbox id={row.id as string} />
+                  </TableCell>
                   {def.listColumns.map((col, i) => {
                     const field = def.fields.find((f) => f.name === col);
 
                     if (i === 0) {
                       return (
-                        <TableCell key={col} className={`py-3 ${isLeads ? "" : "pl-4"}`}>
+                        <TableCell key={col} className="py-3">
                           <Link
                             href={`/${objectKey}/${row.id}`}
                             className="flex items-center gap-3 whitespace-normal"
@@ -321,7 +322,7 @@ export default async function ObjectListPage({
           </div>
         </div>
       </div>
-      </LeadSelectionProvider>
+      </RecordSelectionProvider>
     </div>
   );
 }

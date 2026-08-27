@@ -81,7 +81,37 @@ export async function deleteRecord(
   return { success: true };
 }
 
-async function saveCustomFieldValues(
+export interface BulkDeleteResult {
+  success: boolean;
+  error?: string;
+  deleted: number;
+}
+
+export async function deleteRecords(
+  objectKey: ObjectKey,
+  ids: string[]
+): Promise<BulkDeleteResult> {
+  const def = OBJECTS[objectKey];
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return { success: false, error: "No records selected", deleted: 0 };
+  }
+
+  const supabase = await createClient();
+
+  const { error, count } = await supabase
+    .from(def.table)
+    .delete({ count: "exact" })
+    .in("id", ids);
+
+  if (error) {
+    return { success: false, error: error.message, deleted: 0 };
+  }
+
+  revalidatePath(`/${objectKey}`);
+  return { success: true, deleted: count ?? ids.length };
+}
+
+export async function saveCustomFieldValues(
   objectKey: ObjectKey,
   recordId: string,
   values: Record<string, unknown>

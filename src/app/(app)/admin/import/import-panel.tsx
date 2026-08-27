@@ -1,12 +1,14 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Workbook, type CellValue } from "exceljs";
-import { OBJECTS, type ObjectKey, type FieldDef } from "@/lib/objects";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { OBJECTS, type ObjectKey } from "@/lib/objects";
 import { createClient } from "@/lib/supabase/client";
 import { resolveLookupLabels } from "@/lib/lookup-labels";
+import type { CustomField } from "@/lib/types";
 import { importRecords, type ImportResult, type ImportRow } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -47,9 +49,20 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [idColumn, setIdColumn] = useState<string>("");
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customMapping, setCustomMapping] = useState<Record<string, string>>({});
   const [result, setResult] = useState<ImportResult | null>(null);
 
   const importableFields = def.fields.filter((f) => !f.type.startsWith("readonly"));
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase
+      .from("custom_fields")
+      .select("*")
+      .eq("object_name", def.table)
+      .then(({ data }) => setCustomFields((data as CustomField[]) || []));
+  }, [def.table]);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -77,6 +90,12 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
       setRows(parsed.rows);
       setMapping(autoMapFields(parsed.headers, importableFields));
       setIdColumn(autoMapIdColumn(parsed.headers));
+      setCustomMapping(
+        autoMapFields(
+          parsed.headers,
+          customFields.map((f) => ({ name: f.id, label: f.field_label }))
+        )
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not read that file");
     } finally {
@@ -88,6 +107,10 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
     setMapping((prev) => ({ ...prev, [fieldName]: !header || header === "__skip__" ? "" : header }));
   }
 
+  function updateCustomMapping(fieldId: string, header: string | null) {
+    setCustomMapping((prev) => ({ ...prev, [fieldId]: !header || header === "__skip__" ? "" : header }));
+  }
+
   function handleImport() {
     const mappedRows: ImportRow[] = rows.map((row) => {
       const values: Record<string, unknown> = {};
@@ -95,8 +118,13 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
         if (!header) continue;
         values[fieldName] = row[header];
       }
+      const customValues: Record<string, unknown> = {};
+      for (const [fieldId, header] of Object.entries(customMapping)) {
+        if (!header) continue;
+        customValues[fieldId] = row[header];
+      }
       const id = idColumn ? String(row[idColumn] ?? "").trim() || null : null;
-      return { id, values };
+      return { id, values, customValues };
     });
 
     startTransition(async () => {
@@ -130,11 +158,18 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
         existingRows
       );
 
+      const customValuesByRecord = await loadCustomFieldExportValues(
+        supabase,
+        customFields,
+        existingRows.map((r) => r.id as string)
+      );
+
       const wb = new Workbook();
       const ws = wb.addWorksheet(def.labelPlural.slice(0, 31));
       ws.columns = [
         { header: "id", key: "id" },
         ...def.fields.map((f) => ({ header: f.label, key: f.name })),
+        ...customFields.map((f) => ({ header: f.field_label, key: `cf_${f.id}` })),
       ];
       for (const row of existingRows) {
         const record: Record<string, unknown> = { id: row.id };
@@ -147,6 +182,9 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
           } else {
             record[f.name] = (row[f.name] as string | number | null) ?? "";
           }
+        }
+        for (const cf of customFields) {
+          record[`cf_${cf.id}`] = customValuesByRecord[row.id as string]?.[cf.id] ?? "";
         }
         ws.addRow(record);
       }
@@ -166,7 +204,8 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
     }
   }
 
-  const mappedCount = Object.values(mapping).filter(Boolean).length;
+  const mappedCount =
+    Object.values(mapping).filter(Boolean).length + Object.values(customMapping).filter(Boolean).length;
   const canImport = rows.length > 0 && mappedCount > 0 && !isPending;
 
   return (
@@ -246,6 +285,33 @@ export function ImportPanel({ objectKey }: { objectKey: ObjectKey }) {
                 </Select>
               </div>
             ))}
+
+            {customFields.length > 0 && (
+              <div className="space-y-3 border-t pt-3">
+                <p className="text-sm font-medium text-muted-foreground">Custom Fields</p>
+                {customFields.map((cf) => (
+                  <div key={cf.id} className="flex items-center justify-between gap-4">
+                    <Label>{cf.field_label}</Label>
+                    <Select
+                      value={customMapping[cf.id] || "__skip__"}
+                      onValueChange={(v) => updateCustomMapping(cf.id, v)}
+                    >
+                      <SelectTrigger className="w-64">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__skip__">— Don&apos;t import —</SelectItem>
+                        {headers.map((h) => (
+                          <SelectItem key={h} value={h}>
+                            {h}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -313,7 +379,10 @@ function normalizeHeader(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function autoMapFields(headers: string[], fields: FieldDef[]): Record<string, string> {
+function autoMapFields(
+  headers: string[],
+  fields: { name: string; label: string }[]
+): Record<string, string> {
   const map: Record<string, string> = {};
   for (const f of fields) {
     const match = headers.find(
@@ -328,6 +397,60 @@ function autoMapIdColumn(headers: string[]): string {
   return (
     headers.find((h) => normalizeHeader(h) === "id" || normalizeHeader(h) === "recordid") || ""
   );
+}
+
+async function loadCustomFieldExportValues(
+  supabase: SupabaseClient,
+  customFields: CustomField[],
+  recordIds: string[]
+): Promise<Record<string, Record<string, string>>> {
+  const result: Record<string, Record<string, string>> = {};
+  if (customFields.length === 0 || recordIds.length === 0) return result;
+
+  const { data } = await supabase
+    .from("custom_field_values")
+    .select("*")
+    .in("record_id", recordIds)
+    .in(
+      "custom_field_id",
+      customFields.map((f) => f.id)
+    );
+
+  const lookupObjects = new Set(
+    customFields.filter((f) => f.field_type === "lookup" && f.lookup_object).map((f) => f.lookup_object as string)
+  );
+  const lookupLabelsByTable: Record<string, Record<string, string>> = {};
+  for (const objectKey of lookupObjects) {
+    const table = OBJECTS[objectKey as ObjectKey]?.table;
+    if (!table) continue;
+    const { data: lookupRows } = await supabase.from(table).select("id, name").limit(5000);
+    const map: Record<string, string> = {};
+    for (const r of (lookupRows as { id: string; name: string }[]) || []) {
+      map[r.id] = r.name;
+    }
+    lookupLabelsByTable[objectKey] = map;
+  }
+
+  const fieldsById = new Map(customFields.map((f) => [f.id, f]));
+
+  for (const row of (data as Record<string, unknown>[]) || []) {
+    const field = fieldsById.get(row.custom_field_id as string);
+    if (!field) continue;
+    let value = "";
+    if (field.field_type === "number") {
+      value = row.value_number != null ? String(row.value_number) : "";
+    } else if (field.field_type === "lookup") {
+      const rawId = row.value_lookup as string | null;
+      value = rawId && field.lookup_object ? lookupLabelsByTable[field.lookup_object]?.[rawId] || "" : "";
+    } else {
+      value = (row.value_text as string | null) || "";
+    }
+    const recordId = row.record_id as string;
+    result[recordId] = result[recordId] || {};
+    result[recordId][field.id] = value;
+  }
+
+  return result;
 }
 
 async function parseXlsx(file: File): Promise<ParsedFile> {
