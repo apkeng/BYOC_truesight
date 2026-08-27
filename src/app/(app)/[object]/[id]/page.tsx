@@ -4,6 +4,7 @@ import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { RecordForm } from "@/components/record-form";
 import { FieldViewPanel } from "@/components/field-view-panel";
 import { DeleteRecordButton } from "@/components/delete-record-button";
+import { BackButton } from "@/components/back-button";
 import { SendLeadEmailButton } from "./send-lead-email-button";
 import type { EmailTemplate, Profile } from "@/lib/types";
 
@@ -46,6 +47,7 @@ export default async function RecordDetailPage({
 
   return (
     <div>
+      <BackButton />
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{title || "(untitled)"}</h1>
         <div className="flex items-center gap-2">

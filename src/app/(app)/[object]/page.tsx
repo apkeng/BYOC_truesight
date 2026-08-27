@@ -6,6 +6,7 @@ import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { resolveLookupLabels } from "@/lib/lookup-labels";
 import { formatShortDate, formatNumber } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { BackButton } from "@/components/back-button";
 import { EntityAvatar } from "@/components/entity-avatar";
 import { StatusPill } from "@/components/status-pill";
 import { OwnerAvatar } from "@/components/owner-avatar";
@@ -136,6 +137,7 @@ export default async function ObjectListPage({
 
   return (
     <div className="mx-auto max-w-6xl">
+      <BackButton />
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">{def.labelPlural}</h1>
