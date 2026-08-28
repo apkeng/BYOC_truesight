@@ -33,7 +33,12 @@ export async function proxy(request: NextRequest) {
   // /auth/* routes (e.g. set-password) must stay reachable while signed out —
   // that's exactly the state an invite/recovery link lands the user in before
   // its access_token hash is processed client-side.
-  const isPublicAuthRoute = isLoginRoute || request.nextUrl.pathname.startsWith("/auth/");
+  // /api/cron/* has no user session by design (Vercel Cron / an external
+  // pinger calls it) and does its own auth via a CRON_SECRET bearer token.
+  const isPublicAuthRoute =
+    isLoginRoute ||
+    request.nextUrl.pathname.startsWith("/auth/") ||
+    request.nextUrl.pathname.startsWith("/api/cron/");
 
   if (!user && !isPublicAuthRoute) {
     const url = request.nextUrl.clone();

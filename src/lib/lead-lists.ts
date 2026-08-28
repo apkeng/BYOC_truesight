@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { enrollLeads } from "@/lib/cadences";
 
 export interface LeadListActionResult {
   success: boolean;
@@ -53,4 +54,49 @@ export async function deleteLeadList(listId: string): Promise<LeadListActionResu
 
   revalidatePath("/lead-lists");
   return { success: true };
+}
+
+export async function removeLeadsFromList(
+  listId: string,
+  leadIds: string[]
+): Promise<LeadListActionResult> {
+  if (leadIds.length === 0) return { success: false, error: "No leads selected" };
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("lead_list_members")
+    .delete()
+    .eq("list_id", listId)
+    .in("lead_id", leadIds);
+  if (error) return { success: false, error: error.message };
+
+  revalidatePath(`/lead-lists/${listId}`);
+  return { success: true };
+}
+
+export async function enrollLeadsInCadence(
+  cadenceId: string,
+  leadIds: string[]
+): Promise<LeadListActionResult> {
+  if (leadIds.length === 0) return { success: false, error: "No leads selected" };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: "Not signed in" };
+
+  const { enrolled } = await enrollLeads(supabase, cadenceId, leadIds, user.id);
+  if (enrolled === 0) {
+    return { success: false, error: "All selected leads are already enrolled in that cadence" };
+  }
+  return { success: true };
+}
+
+export async function getActiveCadencesForPicker() {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("cadences")
+    .select("id, name")
+    .eq("active", true)
+    .order("name", { ascending: true });
+  return data || [];
 }

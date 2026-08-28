@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { formatShortDate } from "@/lib/format";
 import { DeleteLeadListButton } from "@/components/delete-lead-list-button";
@@ -56,7 +57,11 @@ export default async function LeadListsPage() {
             )}
             {lists?.map((list) => (
               <TableRow key={list.id}>
-                <TableCell className="py-3 pl-4 font-medium text-foreground">{list.name}</TableCell>
+                <TableCell className="py-3 pl-4 font-medium text-foreground">
+                  <Link href={`/lead-lists/${list.id}`} className="hover:underline">
+                    {list.name}
+                  </Link>
+                </TableCell>
                 <TableCell className="py-3 tabular-nums">
                   {(list.lead_list_members as { count: number }[] | null)?.[0]?.count ?? 0}
                 </TableCell>

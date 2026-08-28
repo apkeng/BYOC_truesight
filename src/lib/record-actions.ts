@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { runWorkflows } from "@/lib/workflows";
+import { runRecordTriggeredCadences } from "@/lib/cadences";
 import { OBJECTS, type ObjectKey } from "@/lib/objects";
 
 export interface RecordActionResult {
@@ -31,6 +32,7 @@ export async function createRecord(
 
   await saveCustomFieldValues(objectKey, data.id, customFieldValues);
   await runWorkflows(supabase, def.table, data);
+  await runRecordTriggeredCadences(supabase, def.table, data, "created");
 
   revalidatePath(`/${objectKey}`);
   return { success: true, id: data.id };
@@ -58,6 +60,7 @@ export async function updateRecord(
 
   await saveCustomFieldValues(objectKey, id, customFieldValues);
   await runWorkflows(supabase, def.table, data);
+  await runRecordTriggeredCadences(supabase, def.table, data, "updated");
 
   revalidatePath(`/${objectKey}`);
   revalidatePath(`/${objectKey}/${id}`);

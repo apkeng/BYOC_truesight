@@ -10,6 +10,7 @@ const SECTIONS = [
   { href: "/admin/field-permissions", title: "Field Permissions", description: "Control what sales users can edit" },
   { href: "/admin/page-layouts", title: "Page Layouts", description: "Control field order per object" },
   { href: "/admin/workflows", title: "Workflows", description: "Field updates, notifications, webhooks" },
+  { href: "/admin/cadences", title: "Cadences", description: "Triggers, timings, emails, and API calls for lead sequences" },
 ];
 
 export default function AdminHomePage() {

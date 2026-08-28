@@ -107,3 +107,68 @@ export interface AppNotification {
   read: boolean;
   created_at: string;
 }
+
+export type CadenceStepType = "email" | "external_api";
+export type CadenceTriggerType = "record_created" | "record_updated" | "scheduled";
+export type CadenceEnrollmentStatus = "active" | "completed" | "removed";
+
+export interface Cadence {
+  id: string;
+  name: string;
+  description: string | null;
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalApiConfig {
+  method: "GET" | "POST";
+  url: string;
+  headers?: Record<string, string>;
+  body_template?: Record<string, unknown>;
+}
+
+export interface CadenceStep {
+  id: string;
+  cadence_id: string;
+  step_order: number;
+  step_type: CadenceStepType;
+  delay_minutes: number;
+  email_template_id: string | null;
+  external_api_config: ExternalApiConfig | null;
+  active: boolean;
+  created_at: string;
+}
+
+export interface CadenceTrigger {
+  id: string;
+  cadence_id: string;
+  trigger_type: CadenceTriggerType;
+  object_name: string;
+  config: Record<string, unknown>;
+  active: boolean;
+  last_run_at: string | null;
+  created_at: string;
+}
+
+export interface CadenceEnrollment {
+  id: string;
+  cadence_id: string;
+  lead_id: string;
+  status: CadenceEnrollmentStatus;
+  current_step_order: number;
+  next_run_at: string | null;
+  enrolled_by: string | null;
+  enrolled_at: string;
+  completed_at: string | null;
+}
+
+export interface CadenceStepRun {
+  id: string;
+  enrollment_id: string;
+  step_id: string | null;
+  status: string;
+  detail: string | null;
+  run_at: string;
+}
