@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { matches } from "./workflows";
+import { matches, withCustomFields } from "./workflows";
 import { substitute, substituteDeep } from "./template";
 import { getResend, EMAIL_FROM } from "./resend";
 import type { CadenceStep, CadenceTrigger, ExternalApiConfig } from "./types";
@@ -215,7 +215,8 @@ export async function tickCadenceEngine(supabase: SupabaseClient): Promise<Caden
 
     if (cadence?.active) {
       const { data: candidateRecords } = await supabase.from("leads").select("*");
-      const matchingIds = (candidateRecords || [])
+      const enrichedRecords = await withCustomFields(supabase, "leads", candidateRecords || []);
+      const matchingIds = enrichedRecords
         .filter((r: Record<string, unknown>) => matches(trigger.config || {}, r))
         .map((r: Record<string, unknown>) => r.id as string);
 

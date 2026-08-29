@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { runWorkflows } from "@/lib/workflows";
+import { runWorkflows, withCustomFields } from "@/lib/workflows";
 import { runRecordTriggeredCadences } from "@/lib/cadences";
 import { OBJECTS, type ObjectKey } from "@/lib/objects";
 
@@ -31,8 +31,9 @@ export async function createRecord(
   }
 
   await saveCustomFieldValues(objectKey, data.id, customFieldValues);
-  await runWorkflows(supabase, def.table, data);
-  await runRecordTriggeredCadences(supabase, def.table, data, "created");
+  const [enrichedRecord] = await withCustomFields(supabase, def.table, [data]);
+  await runWorkflows(supabase, def.table, enrichedRecord);
+  await runRecordTriggeredCadences(supabase, def.table, enrichedRecord, "created");
 
   revalidatePath(`/${objectKey}`);
   return { success: true, id: data.id };
@@ -59,8 +60,9 @@ export async function updateRecord(
   }
 
   await saveCustomFieldValues(objectKey, id, customFieldValues);
-  await runWorkflows(supabase, def.table, data);
-  await runRecordTriggeredCadences(supabase, def.table, data, "updated");
+  const [enrichedRecord] = await withCustomFields(supabase, def.table, [data]);
+  await runWorkflows(supabase, def.table, enrichedRecord);
+  await runRecordTriggeredCadences(supabase, def.table, enrichedRecord, "updated");
 
   revalidatePath(`/${objectKey}`);
   revalidatePath(`/${objectKey}/${id}`);
