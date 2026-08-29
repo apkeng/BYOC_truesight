@@ -3,7 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import Image from "next/image";
 import { Shield, ChevronRight, LogOut, KeyRound, ListChecks } from "lucide-react";
+import truesightLogo from "@/assets/truesight-logo.png";
 import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { NAV_SECTIONS, sectionForObject } from "@/lib/nav";
 import { NotificationsBell } from "@/components/notifications-bell";
@@ -38,8 +40,8 @@ export function AppShell({
     <div className="flex min-h-screen w-full bg-background">
       <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-sidebar px-3 py-4">
         <div className="flex items-center gap-2 px-2 pb-6">
-          <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">
-            C
+          <div className="flex size-8 items-center justify-center overflow-hidden rounded-lg">
+            <Image src={truesightLogo} alt="Truesight" width={32} height={32} className="h-full w-full object-cover" />
           </div>
           <span className="text-lg font-semibold">CRM</span>
         </div>
