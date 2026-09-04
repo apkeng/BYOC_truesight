@@ -64,12 +64,21 @@ export interface Workflow {
   active: boolean;
 }
 
+/** A call-to-action link or poster image attached to an email template. */
+export interface EmailAttachment {
+  id: string;
+  type: "link" | "poster";
+  name: string;
+  url: string;
+}
+
 export interface EmailTemplate {
   id: string;
   object_name: string;
   name: string;
   subject: string;
   body: string;
+  attachments: EmailAttachment[];
   created_by: string | null;
   created_at: string;
   updated_at: string;

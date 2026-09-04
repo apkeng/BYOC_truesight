@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { TemplateFields } from "./template-fields";
 import { createEmailTemplate } from "./actions";
+import type { EmailAttachment } from "@/lib/types";
 
 export function EmailTemplateForm() {
   const router = useRouter();
@@ -14,6 +15,7 @@ export function EmailTemplateForm() {
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,6 +25,7 @@ export function EmailTemplateForm() {
         name,
         subject,
         body,
+        attachments,
       });
       if (!result.success) toast.error(result.error || "Failed to create template");
       else {
@@ -30,6 +33,7 @@ export function EmailTemplateForm() {
         setName("");
         setSubject("");
         setBody("");
+        setAttachments([]);
         router.refresh();
       }
     });
@@ -49,6 +53,8 @@ export function EmailTemplateForm() {
             onSubjectChange={setSubject}
             body={body}
             onBodyChange={setBody}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
           />
           <Button type="submit" disabled={isPending}>
             {isPending ? "Creating..." : "Create template"}

@@ -2,7 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { matches, withCustomFields } from "./workflows";
 import { substitute, substituteDeep } from "./template";
 import { getResend, EMAIL_FROM } from "./resend";
-import type { CadenceStep, CadenceTrigger, ExternalApiConfig } from "./types";
+import { buildEmailHtml, buildResendAttachments } from "./email-render";
+import type { CadenceStep, CadenceTrigger, EmailAttachment, ExternalApiConfig } from "./types";
 
 const RETRY_BACKOFF_MINUTES = 15;
 
@@ -121,6 +122,7 @@ async function executeStep(
 
     const subject = substitute(template.subject, lead);
     const body = substitute(template.body, lead);
+    const attachments = (template.attachments as EmailAttachment[]) || [];
 
     const resend = getResend();
     let sendError: string | null = null;
@@ -132,6 +134,8 @@ async function executeStep(
         to,
         subject,
         text: body,
+        html: buildEmailHtml(body, attachments),
+        attachments: buildResendAttachments(attachments),
       });
       sendError = error?.message ?? null;
     }

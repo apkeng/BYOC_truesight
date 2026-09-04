@@ -16,7 +16,8 @@ export default async function EmailTemplatesAdminPage() {
       <h1 className="text-2xl font-semibold">Email Templates</h1>
       <p className="text-sm text-muted-foreground">
         Templates sales users can use to email leads. Insert lead fields with the buttons above the
-        subject/body, e.g. <code>{"{{name}}"}</code>.
+        subject/body, e.g. <code>{"{{name}}"}</code>. Add link buttons and poster images in the
+        Attachments section &mdash; they&apos;re appended to the email when it&apos;s sent.
       </p>
       <div className="grid gap-6 lg:grid-cols-2">
         <EmailTemplateForm />

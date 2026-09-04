@@ -43,6 +43,8 @@ export function SendLeadEmailButton({
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const selectedTemplate = templates.find((t) => t.id === templateId);
+  const attachments = selectedTemplate?.attachments || [];
 
   function onTemplateChange(id: string) {
     setTemplateId(id);
@@ -115,6 +117,11 @@ export function SendLeadEmailButton({
             <Label>Body</Label>
             <Textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} />
           </div>
+          {attachments.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Will also send: {attachments.map((a) => a.name).join(", ")}
+            </p>
+          )}
         </div>
         <DialogFooter>
           <Button disabled={isPending} onClick={send}>

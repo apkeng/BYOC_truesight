@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getResend, EMAIL_FROM } from "@/lib/resend";
+import { buildEmailHtml, buildResendAttachments } from "@/lib/email-render";
+import type { EmailAttachment } from "@/lib/types";
 
 export async function sendLeadEmail(input: {
   leadId: string;
@@ -23,6 +25,16 @@ export async function sendLeadEmail(input: {
     .eq("id", user.id)
     .single();
 
+  let attachments: EmailAttachment[] = [];
+  if (input.templateId) {
+    const { data: template } = await supabase
+      .from("email_templates")
+      .select("attachments")
+      .eq("id", input.templateId)
+      .single();
+    attachments = (template?.attachments as EmailAttachment[]) || [];
+  }
+
   const resend = getResend();
   if (!resend) {
     return {
@@ -36,6 +48,8 @@ export async function sendLeadEmail(input: {
     to: input.to,
     subject: input.subject,
     text: input.body,
+    html: buildEmailHtml(input.body, attachments),
+    attachments: buildResendAttachments(attachments),
     replyTo: profile?.email || undefined,
   });
 

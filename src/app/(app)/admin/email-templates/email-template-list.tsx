@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { TemplateFields } from "./template-fields";
 import { updateEmailTemplate, deleteEmailTemplate } from "./actions";
-import type { EmailTemplate } from "@/lib/types";
+import type { EmailAttachment, EmailTemplate } from "@/lib/types";
 
 export function EmailTemplateList({ templates }: { templates: EmailTemplate[] }) {
   const router = useRouter();
@@ -23,18 +23,20 @@ export function EmailTemplateList({ templates }: { templates: EmailTemplate[] })
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
 
   function openEdit(t: EmailTemplate) {
     setEditing(t);
     setName(t.name);
     setSubject(t.subject);
     setBody(t.body);
+    setAttachments(t.attachments || []);
   }
 
   function saveEdit() {
     if (!editing) return;
     startTransition(async () => {
-      const result = await updateEmailTemplate(editing.id, { name, subject, body });
+      const result = await updateEmailTemplate(editing.id, { name, subject, body, attachments });
       if (!result.success) toast.error(result.error || "Failed to update template");
       else {
         toast.success("Template updated");
@@ -103,6 +105,8 @@ export function EmailTemplateList({ templates }: { templates: EmailTemplate[] })
             onSubjectChange={setSubject}
             body={body}
             onBodyChange={setBody}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
           />
           <DialogFooter>
             <Button disabled={isPending} onClick={saveEdit}>
