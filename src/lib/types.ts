@@ -55,6 +55,13 @@ export type WorkflowTriggerType =
   | "external_get"
   | "notification";
 
+/**
+ * How a workflow's when_field/when_value condition is evaluated.
+ * "always" re-fires on every save while the value matches; "on_change" fires
+ * only on the save that moved the field into that value.
+ */
+export type WorkflowWhenMode = "always" | "on_change";
+
 export interface Workflow {
   id: string;
   name: string;

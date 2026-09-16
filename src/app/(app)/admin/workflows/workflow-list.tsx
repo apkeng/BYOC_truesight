@@ -39,6 +39,7 @@ export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
           <TableHead>Name</TableHead>
           <TableHead>Object</TableHead>
           <TableHead>Trigger</TableHead>
+          <TableHead>Run when</TableHead>
           <TableHead>Active</TableHead>
           <TableHead></TableHead>
         </TableRow>
@@ -46,7 +47,7 @@ export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
       <TableBody>
         {workflows.length === 0 && (
           <TableRow>
-            <TableCell colSpan={5} className="text-center text-muted-foreground">
+            <TableCell colSpan={6} className="text-center text-muted-foreground">
               No workflows yet.
             </TableCell>
           </TableRow>
@@ -57,6 +58,13 @@ export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
             <TableCell>{OBJECTS[w.object_name as keyof typeof OBJECTS]?.labelPlural || w.object_name}</TableCell>
             <TableCell>
               <Badge variant="secondary">{w.trigger_type}</Badge>
+            </TableCell>
+            <TableCell className="text-xs text-muted-foreground">
+              {!w.config?.when_field
+                ? "every save"
+                : w.config.when_mode === "on_change"
+                ? "on change"
+                : "while matching"}
             </TableCell>
             <TableCell>
               <Switch checked={w.active} disabled={isPending} onCheckedChange={(v) => toggle(w.id, v)} />

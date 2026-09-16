@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -16,19 +16,23 @@ import {
 } from "@/components/ui/select";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { OBJECTS, OBJECT_KEYS } from "@/lib/objects";
+import { createClient } from "@/lib/supabase/client";
+import type { CustomField } from "@/lib/types";
 import { createWorkflow } from "./actions";
-import type { WorkflowTriggerType } from "@/lib/types";
+import type { WorkflowTriggerType, WorkflowWhenMode } from "@/lib/types";
 
 const EXAMPLES: Record<WorkflowTriggerType, string> = {
   field_update: `{
   "when_field": "stage",
   "when_value": "Closed/Closed Lost",
+  "when_mode": "always",
   "set_field": "owner",
   "set_value": "<user-uuid>"
 }`,
   notification: `{
   "when_field": "stage",
   "when_value": "Contracting",
+  "when_mode": "on_change",
   "notify_user_field": "owner",
   "title": "{{name}} moved to Contracting",
   "body": "Organization {{name}} is now in Contracting stage."
@@ -36,6 +40,7 @@ const EXAMPLES: Record<WorkflowTriggerType, string> = {
   external_post: `{
   "when_field": "stage",
   "when_value": "Onboarded",
+  "when_mode": "on_change",
   "url": "https://example.com/webhook",
   "headers": { "X-Api-Key": "secret" },
   "body_template": { "org": "{{name}}", "stage": "{{stage}}" }
@@ -52,6 +57,49 @@ export function WorkflowForm() {
   const [objectName, setObjectName] = useState(OBJECT_KEYS[0]);
   const [triggerType, setTriggerType] = useState<WorkflowTriggerType>("field_update");
   const [config, setConfig] = useState(EXAMPLES.field_update);
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+
+  useEffect(() => {
+    let ignore = false;
+    createClient()
+      .from("custom_fields")
+      .select("*")
+      .eq("object_name", OBJECTS[objectName].table)
+      .then(({ data }) => {
+        if (!ignore) setCustomFields((data as CustomField[]) || []);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [objectName]);
+
+  const knownFields = useMemo(
+    () => [
+      "id",
+      ...OBJECTS[objectName].fields.map((f) => f.name),
+      ...customFields.map((f) => f.field_name),
+    ],
+    [objectName, customFields]
+  );
+
+  // The JSON textarea stays the source of truth; this select just reads and
+  // rewrites the when_mode key so admins do not have to know it exists.
+  const parsedConfig = useMemo(() => {
+    try {
+      const v = JSON.parse(config);
+      return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }, [config]);
+
+  const whenMode: WorkflowWhenMode =
+    parsedConfig?.when_mode === "on_change" ? "on_change" : "always";
+
+  function onWhenModeChange(v: WorkflowWhenMode) {
+    if (!parsedConfig) return;
+    setConfig(JSON.stringify({ ...parsedConfig, when_mode: v }, null, 2));
+  }
 
   function onTriggerChange(v: WorkflowTriggerType) {
     setTriggerType(v);
@@ -67,6 +115,27 @@ export function WorkflowForm() {
       toast.error("Config must be valid JSON");
       return;
     }
+    // config keys whose value must name a real field on this object; an unknown
+    // name silently never matches at runtime, which reads as "workflows are broken"
+    const unknown = (["when_field", "set_field", "notify_user_field"] as const)
+      .map((key) => parsed[key])
+      .filter((v): v is string => typeof v === "string" && v.length > 0)
+      .filter((v) => !knownFields.includes(v));
+    if (parsed.when_mode !== undefined && parsed.when_mode !== "always" && parsed.when_mode !== "on_change") {
+      toast.error('when_mode must be "always" or "on_change"');
+      return;
+    }
+    if (parsed.when_mode === "on_change" && !parsed.when_field) {
+      toast.error('"Only when it changes" needs a when_field to watch');
+      return;
+    }
+    if (unknown.length > 0) {
+      toast.error(
+        `Unknown field${unknown.length > 1 ? "s" : ""} on ${OBJECTS[objectName].labelPlural}: ${unknown.join(", ")}`
+      );
+      return;
+    }
+
     startTransition(async () => {
       const result = await createWorkflow({
         name,
@@ -126,6 +195,27 @@ export function WorkflowForm() {
             </div>
           </div>
           <div className="space-y-1.5">
+            <Label>Run when</Label>
+            <Select
+              value={whenMode}
+              disabled={!parsedConfig}
+              onValueChange={(v) => v && onWhenModeChange(v as WorkflowWhenMode)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="always">Every save while the condition matches</SelectItem>
+                <SelectItem value="on_change">Only when the field changes to that value</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {whenMode === "on_change"
+                ? "Fires once, on the save that moves the field into the value. A record already sitting at that value stays quiet."
+                : "Re-fires on every save while the field holds the value, so a record saved repeatedly triggers repeatedly."}
+            </p>
+          </div>
+          <div className="space-y-1.5">
             <Label>Config (JSON)</Label>
             <Textarea
               rows={8}
@@ -137,6 +227,10 @@ export function WorkflowForm() {
               Runs after a create/update on the object when <code>when_field</code> equals{" "}
               <code>when_value</code> (omit both to run on every save). Use <code>{"{{field_name}}"}</code> in
               text values to substitute the record&apos;s field values.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Fields available on {OBJECTS[objectName].labelPlural}:{" "}
+              <code className="break-words">{knownFields.join(", ")}</code>
             </p>
           </div>
           <Button type="submit" disabled={isPending}>

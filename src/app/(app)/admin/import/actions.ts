@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
-import { runWorkflows } from "@/lib/workflows";
+import { runWorkflows, withCustomFields, snapshotRecord } from "@/lib/workflows";
 import { saveCustomFieldValues } from "@/lib/record-actions";
 import { OBJECTS, isObjectKey, type FieldDef, type ObjectKey } from "@/lib/objects";
 import type { CustomField } from "@/lib/types";
@@ -110,6 +110,7 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
           failed++;
           continue;
         }
+        const previous = await snapshotRecord(supabase, def.table, id);
         const { data, error } = await supabase
           .from(def.table)
           .update(fields)
@@ -126,7 +127,8 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
         if (Object.keys(customPayload).length > 0) {
           await saveCustomFieldValues(objectKey, id, customPayload);
         }
-        await runWorkflows(supabase, def.table, data);
+        const [enrichedRow] = await withCustomFields(supabase, def.table, [data]);
+        await runWorkflows(supabase, def.table, enrichedRow, previous);
         updated++;
         for (const w of warnings) notes.push({ row: rowNum, level: "warning", message: w });
       } else {
@@ -147,7 +149,8 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
         if (Object.keys(customPayload).length > 0) {
           await saveCustomFieldValues(objectKey, data.id, customPayload);
         }
-        await runWorkflows(supabase, def.table, data);
+        const [enrichedRow] = await withCustomFields(supabase, def.table, [data]);
+        await runWorkflows(supabase, def.table, enrichedRow, null);
         created++;
         for (const w of warnings) notes.push({ row: rowNum, level: "warning", message: w });
       }

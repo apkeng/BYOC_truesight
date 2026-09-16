@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { runWorkflows, withCustomFields } from "@/lib/workflows";
+import { runWorkflows, withCustomFields, snapshotRecord } from "@/lib/workflows";
 import { runRecordTriggeredCadences } from "@/lib/cadences";
 import { OBJECTS, type ObjectKey } from "@/lib/objects";
 
@@ -32,7 +32,9 @@ export async function createRecord(
 
   await saveCustomFieldValues(objectKey, data.id, customFieldValues);
   const [enrichedRecord] = await withCustomFields(supabase, def.table, [data]);
-  await runWorkflows(supabase, def.table, enrichedRecord);
+  // null (not undefined): a create genuinely has no prior value, which is what
+  // lets an "on_change" workflow treat the initial value as a change.
+  await runWorkflows(supabase, def.table, enrichedRecord, null);
   await runRecordTriggeredCadences(supabase, def.table, enrichedRecord, "created");
 
   revalidatePath(`/${objectKey}`);
@@ -48,6 +50,8 @@ export async function updateRecord(
   const def = OBJECTS[objectKey];
   const supabase = await createClient();
 
+  const previous = await snapshotRecord(supabase, def.table, id);
+
   const { data, error } = await supabase
     .from(def.table)
     .update(fields)
@@ -61,7 +65,7 @@ export async function updateRecord(
 
   await saveCustomFieldValues(objectKey, id, customFieldValues);
   const [enrichedRecord] = await withCustomFields(supabase, def.table, [data]);
-  await runWorkflows(supabase, def.table, enrichedRecord);
+  await runWorkflows(supabase, def.table, enrichedRecord, previous);
   await runRecordTriggeredCadences(supabase, def.table, enrichedRecord, "updated");
 
   revalidatePath(`/${objectKey}`);
