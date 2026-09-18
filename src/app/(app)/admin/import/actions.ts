@@ -111,12 +111,14 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
           continue;
         }
         const previous = await snapshotRecord(supabase, def.table, id);
-        const { data, error } = await supabase
-          .from(def.table)
-          .update(fields)
-          .eq("id", id)
-          .select()
-          .single();
+        // A row that maps only custom fields leaves nothing to write to the base
+        // table, and PostgREST treats an empty patch as matching zero rows — so
+        // read the record instead of sending an update that would look like a
+        // missing ID.
+        const { data, error } =
+          Object.keys(fields).length > 0
+            ? await supabase.from(def.table).update(fields).eq("id", id).select().single()
+            : await supabase.from(def.table).select("*").eq("id", id).single();
         if (error || !data) {
           const message =
             error?.code === "PGRST116" ? `Record ID ${id} not found` : error?.message || `Record ID ${id} not found`;
