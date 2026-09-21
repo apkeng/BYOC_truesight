@@ -252,7 +252,26 @@ export async function tickCadenceEngine(supabase: SupabaseClient): Promise<Caden
     .eq("status", "active")
     .lte("next_run_at", now.toISOString());
 
+  // Switching a cadence off has to stop the leads already enrolled in it, not
+  // just block new enrolments - otherwise an inactive cadence keeps delivering
+  // its remaining steps on schedule. Skipped enrolments keep status "active"
+  // and their next_run_at, so re-activating the cadence resumes them from the
+  // step they had reached rather than dropping them.
+  const dueCadenceIds = [
+    ...new Set((dueEnrollments || []).map((e) => e.cadence_id as string)),
+  ];
+  const runnableCadenceIds = new Set<string>();
+  if (dueCadenceIds.length > 0) {
+    const { data: runnableCadences } = await supabase
+      .from("cadences")
+      .select("id")
+      .in("id", dueCadenceIds)
+      .eq("active", true);
+    for (const c of runnableCadences || []) runnableCadenceIds.add(c.id as string);
+  }
+
   for (const enrollment of dueEnrollments || []) {
+    if (!runnableCadenceIds.has(enrollment.cadence_id as string)) continue;
     const { data: steps } = await supabase
       .from("cadence_steps")
       .select("*")
