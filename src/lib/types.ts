@@ -20,6 +20,11 @@ export interface PicklistValue {
 
 export type CustomFieldType = "number" | "text" | "picklist" | "lookup";
 
+/**
+ * An admin-defined field. The definition lives here; the *values* live in a
+ * column named `field_name` on the object's own table, added by
+ * create_custom_field (see supabase/migrations/*_custom_fields_as_columns.sql).
+ */
 export interface CustomField {
   id: string;
   object_name: string;
@@ -29,15 +34,6 @@ export interface CustomField {
   picklist_values: string[] | null;
   lookup_object: string | null;
   default_value: string | null;
-}
-
-export interface CustomFieldValue {
-  id: string;
-  custom_field_id: string;
-  record_id: string;
-  value_text: string | null;
-  value_number: number | null;
-  value_lookup: string | null;
 }
 
 export interface FieldPermission {

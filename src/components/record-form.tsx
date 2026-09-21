@@ -90,32 +90,18 @@ export function RecordForm({
       .eq("object_name", def.table)
       .then(({ data }) => setPermissions((data as FieldPermission[]) || []));
 
+    // Only the field *definitions* are fetched. Custom fields are columns on
+    // the object's table, so their values arrived with the record itself.
     supabase
       .from("custom_fields")
       .select("*")
       .eq("object_name", def.table)
-      .then(async ({ data }) => {
+      .then(({ data }) => {
         const fields = (data as CustomField[]) || [];
         setCustomFields(fields);
-        if (mode === "edit" && record.id && fields.length > 0) {
-          const { data: cfv } = await supabase
-            .from("custom_field_values")
-            .select("*")
-            .eq("record_id", record.id as string)
-            .in("custom_field_id", fields.map((f) => f.id));
-          const init: Record<string, unknown> = {};
-          for (const row of cfv || []) {
-            const field = fields.find((f) => f.id === row.custom_field_id);
-            if (!field) continue;
-            init[field.id] =
-              field.field_type === "number"
-                ? row.value_number
-                : field.field_type === "lookup"
-                ? row.value_lookup
-                : row.value_text;
-          }
-          setCustomValues(init);
-        }
+        const init: Record<string, unknown> = {};
+        for (const f of fields) init[f.field_name] = record[f.field_name] ?? "";
+        setCustomValues(init);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [def.table, mode, record.id]);
@@ -161,11 +147,21 @@ export function RecordForm({
       payload[f.name] = v;
     }
 
+    // Custom fields go into real columns now, so they need the same coercion
+    // the built-in fields get: "" is not a valid numeric or uuid.
+    const customPayload: Record<string, unknown> = {};
+    for (const cf of customFields) {
+      let v = customValues[cf.field_name];
+      if (v === "" || v === undefined) v = null;
+      if (cf.field_type === "number" && v !== null) v = Number(v);
+      customPayload[cf.field_name] = v;
+    }
+
     startTransition(async () => {
       const result =
         mode === "create"
-          ? await createRecord(objectKey, payload, customValues)
-          : await updateRecord(objectKey, record.id as string, payload, customValues);
+          ? await createRecord(objectKey, payload, customPayload)
+          : await updateRecord(objectKey, record.id as string, payload, customPayload);
 
       if (!result.success) {
         toast.error(result.error || "Something went wrong");
@@ -207,8 +203,8 @@ export function RecordForm({
               <Label>{cf.field_label}</Label>
               <CustomFieldInput
                 field={cf}
-                value={customValues[cf.id]}
-                onChange={(v) => setCustomValues((prev) => ({ ...prev, [cf.id]: v }))}
+                value={customValues[cf.field_name]}
+                onChange={(v) => setCustomValues((prev) => ({ ...prev, [cf.field_name]: v }))}
                 picklistOptions={picklists[cf.field_name] || []}
               />
             </div>

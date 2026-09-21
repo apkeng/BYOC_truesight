@@ -15,6 +15,9 @@ import { substitute, substituteDeep } from "./template";
  * prior value, so a matching value counts as a change), or undefined when the
  * caller does not track prior state at all - in which case "on_change" cannot
  * be evaluated and degrades to "always" rather than silently never firing.
+ *
+ * Custom fields are plain columns on the object's table, so `when_field` reads
+ * the same whether it names a built-in field or a custom one.
  */
 export function matches(
   config: Record<string, unknown>,
@@ -33,55 +36,9 @@ export function matches(
 }
 
 /**
- * Merges each record's custom field values (by field_name) onto the record
- * object, so matches()/substitute() can reference custom fields the same way
- * they reference built-in columns. Custom field values live in a separate
- * custom_field_values table (keyed by custom_field_id, not field_name), so
- * without this, config.when_field pointing at a custom field would always
- * read as undefined off the raw table row.
- */
-export async function withCustomFields(
-  supabase: SupabaseClient,
-  objectName: string,
-  records: Record<string, unknown>[]
-): Promise<Record<string, unknown>[]> {
-  if (records.length === 0) return records;
-
-  const { data: fields } = await supabase
-    .from("custom_fields")
-    .select("id, field_name, field_type")
-    .eq("object_name", objectName);
-  if (!fields || fields.length === 0) return records;
-
-  const { data: values } = await supabase
-    .from("custom_field_values")
-    .select("*")
-    .in("record_id", records.map((r) => r.id as string))
-    .in("custom_field_id", fields.map((f) => f.id as string));
-
-  const fieldById = new Map(fields.map((f) => [f.id as string, f]));
-  const byRecordId = new Map<string, Record<string, unknown>>();
-  for (const row of values || []) {
-    const field = fieldById.get(row.custom_field_id as string);
-    if (!field) continue;
-    const bucket = byRecordId.get(row.record_id as string) ?? {};
-    bucket[field.field_name as string] =
-      field.field_type === "number"
-        ? row.value_number
-        : field.field_type === "lookup"
-        ? row.value_lookup
-        : row.value_text;
-    byRecordId.set(row.record_id as string, bucket);
-  }
-
-  return records.map((r) => ({ ...r, ...(byRecordId.get(r.id as string) ?? {}) }));
-}
-
-/**
- * Reads a record (custom fields merged) as it stands right now, for use as the
- * pre-save `previous` passed to runWorkflows. Must be called before the write.
- * Returns null if the record cannot be read, which "on_change" then treats the
- * same as a create.
+ * Reads a record as it stands right now, for use as the pre-save `previous`
+ * passed to runWorkflows. Must be called before the write. Returns null if the
+ * record cannot be read, which "on_change" then treats the same as a create.
  */
 export async function snapshotRecord(
   supabase: SupabaseClient,
@@ -89,33 +46,7 @@ export async function snapshotRecord(
   id: string
 ): Promise<Record<string, unknown> | null> {
   const { data } = await supabase.from(table).select("*").eq("id", id).maybeSingle();
-  if (!data) return null;
-  const [enriched] = await withCustomFields(supabase, table, [data]);
-  return enriched ?? null;
-}
-
-/** Looks up a custom field by name for an object, or null if it is a base column. */
-async function findCustomField(
-  supabase: SupabaseClient,
-  objectName: string,
-  fieldName: string
-): Promise<{ id: string; field_type: string } | null> {
-  const { data } = await supabase
-    .from("custom_fields")
-    .select("id, field_type")
-    .eq("object_name", objectName)
-    .eq("field_name", fieldName)
-    .maybeSingle();
-  return (data as { id: string; field_type: string } | null) ?? null;
-}
-
-/** Maps a raw value onto the right custom_field_values column for its type. */
-function customValuePayload(fieldType: string, raw: unknown) {
-  return {
-    value_text: fieldType === "number" || fieldType === "lookup" ? null : raw == null ? null : String(raw),
-    value_number: fieldType === "number" ? (raw === "" || raw == null ? null : Number(raw)) : null,
-    value_lookup: fieldType === "lookup" ? raw || null : null,
-  };
+  return (data as Record<string, unknown> | null) ?? null;
 }
 
 /**
@@ -148,21 +79,11 @@ export async function runWorkflows(
     if (workflow.trigger_type === "field_update") {
       const setField = config.set_field as string | undefined;
       if (setField) {
-        const custom = await findCustomField(supabase, objectName, setField);
-        const { error } = custom
-          ? await supabase.from("custom_field_values").upsert(
-              {
-                custom_field_id: custom.id,
-                record_id: record.id,
-                ...customValuePayload(custom.field_type, config.set_value),
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "custom_field_id,record_id" }
-            )
-          : await supabase
-              .from(objectName)
-              .update({ [setField]: config.set_value })
-              .eq("id", record.id);
+        // One code path for built-in and custom fields: both are columns.
+        const { error } = await supabase
+          .from(objectName)
+          .update({ [setField]: config.set_value })
+          .eq("id", record.id);
         if (error) {
           console.error(
             `[workflow ${workflow.id}] field_update on "${setField}" failed: ${error.message}`

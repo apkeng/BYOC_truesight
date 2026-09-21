@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { matches, withCustomFields } from "./workflows";
+import { matches } from "./workflows";
 import { substitute, substituteDeep } from "./template";
 import { getResend, EMAIL_FROM } from "./resend";
 import { buildEmailHtml, buildResendAttachments } from "./email-render";
@@ -218,9 +218,9 @@ export async function tickCadenceEngine(supabase: SupabaseClient): Promise<Caden
       .single();
 
     if (cadence?.active) {
+      // select("*") already carries custom fields - they are columns on leads.
       const { data: candidateRecords } = await supabase.from("leads").select("*");
-      const enrichedRecords = await withCustomFields(supabase, "leads", candidateRecords || []);
-      const matchingIds = enrichedRecords
+      const matchingIds = ((candidateRecords || []) as Record<string, unknown>[])
         .filter((r: Record<string, unknown>) => matches(trigger.config || {}, r))
         .map((r: Record<string, unknown>) => r.id as string);
 

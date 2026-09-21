@@ -3,6 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 
+/**
+ * Creates a custom field. The field's values live in a real column on the
+ * object's table, so creating one is a schema change: `create_custom_field`
+ * adds the column and writes the catalog row in a single transaction, under an
+ * admin check (see supabase/migrations/*_custom_fields_as_columns.sql). Nothing
+ * here can reach ALTER TABLE on its own — the anon-key session the server
+ * client carries has no DDL rights.
+ */
 export async function createCustomField(input: {
   object_name: string;
   field_name: string;
@@ -12,12 +20,13 @@ export async function createCustomField(input: {
   lookup_object?: string;
 }) {
   const supabase = await createClient();
-  const { error } = await supabase.from("custom_fields").insert({
-    object_name: input.object_name,
-    field_name: input.field_name,
-    field_label: input.field_label,
-    field_type: input.field_type,
-    lookup_object: input.field_type === "lookup" ? input.lookup_object : null,
+  const { error } = await supabase.rpc("create_custom_field", {
+    p_object_name: input.object_name,
+    p_field_name: input.field_name,
+    p_field_label: input.field_label,
+    p_field_type: input.field_type,
+    p_picklist_values: null,
+    p_lookup_object: input.field_type === "lookup" ? input.lookup_object ?? null : null,
   });
 
   if (!error && input.field_type === "picklist" && input.picklist_values?.length) {
@@ -37,6 +46,7 @@ export async function createCustomField(input: {
   return { success: !error, error: error?.message };
 }
 
+/** Drops the field's column along with its catalog row — the values go with it. */
 export async function deleteCustomField(id: string) {
   const supabase = await createClient();
   const { data: field } = await supabase
@@ -45,7 +55,7 @@ export async function deleteCustomField(id: string) {
     .eq("id", id)
     .single();
 
-  const { error } = await supabase.from("custom_fields").delete().eq("id", id);
+  const { error } = await supabase.rpc("delete_custom_field", { p_id: id });
 
   if (!error && field) {
     await supabase

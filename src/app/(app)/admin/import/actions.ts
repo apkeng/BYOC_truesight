@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
-import { runWorkflows, withCustomFields, snapshotRecord } from "@/lib/workflows";
-import { saveCustomFieldValues } from "@/lib/record-actions";
+import { runWorkflows, snapshotRecord } from "@/lib/workflows";
 import { OBJECTS, isObjectKey, type FieldDef, type ObjectKey } from "@/lib/objects";
 import type { CustomField } from "@/lib/types";
 
@@ -13,7 +12,7 @@ export interface ImportRow {
   id: string | null;
   /** field name -> raw cell value, already limited to mapped fields */
   values: Record<string, unknown>;
-  /** custom_field id -> raw cell value, already limited to mapped custom fields */
+  /** custom field_name -> raw cell value, already limited to mapped custom fields */
   customValues?: Record<string, unknown>;
 }
 
@@ -67,7 +66,9 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
     .from("custom_fields")
     .select("*")
     .eq("object_name", def.table);
-  const customFields = new Map(((customFieldsData as CustomField[]) || []).map((f) => [f.id, f]));
+  // Keyed by field_name: a custom field is a column on def.table, so its
+  // values are written in the same insert/update as the built-in fields.
+  const customFields = new Map(((customFieldsData as CustomField[]) || []).map((f) => [f.field_name, f]));
   const customLookupMaps = await buildCustomLookupLabelMaps(supabase, customFields, rows);
 
   let created = 0;
@@ -95,12 +96,11 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
         if (warning) warnings.push(warning);
       }
 
-      const customPayload: Record<string, unknown> = {};
-      for (const [customFieldId, rawValue] of Object.entries(row.customValues || {})) {
-        const field = customFields.get(customFieldId);
+      for (const [fieldName, rawValue] of Object.entries(row.customValues || {})) {
+        const field = customFields.get(fieldName);
         if (!field) continue;
-        const { value, warning } = coerceCustomValue(field, rawValue, customLookupMaps.get(customFieldId));
-        customPayload[customFieldId] = value;
+        const { value, warning } = coerceCustomValue(field, rawValue, customLookupMaps.get(fieldName));
+        fields[fieldName] = value;
         if (warning) warnings.push(warning);
       }
 
@@ -111,10 +111,9 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
           continue;
         }
         const previous = await snapshotRecord(supabase, def.table, id);
-        // A row that maps only custom fields leaves nothing to write to the base
-        // table, and PostgREST treats an empty patch as matching zero rows — so
-        // read the record instead of sending an update that would look like a
-        // missing ID.
+        // A row that maps no fields at all leaves nothing to write, and
+        // PostgREST treats an empty patch as matching zero rows — so read the
+        // record instead of sending an update that would look like a missing ID.
         const { data, error } =
           Object.keys(fields).length > 0
             ? await supabase.from(def.table).update(fields).eq("id", id).select().single()
@@ -126,11 +125,7 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
           failed++;
           continue;
         }
-        if (Object.keys(customPayload).length > 0) {
-          await saveCustomFieldValues(objectKey, id, customPayload);
-        }
-        const [enrichedRow] = await withCustomFields(supabase, def.table, [data]);
-        await runWorkflows(supabase, def.table, enrichedRow, previous);
+        await runWorkflows(supabase, def.table, data as Record<string, unknown>, previous);
         updated++;
         for (const w of warnings) notes.push({ row: rowNum, level: "warning", message: w });
       } else {
@@ -148,11 +143,7 @@ export async function importRecords(objectKey: string, rows: ImportRow[]): Promi
           failed++;
           continue;
         }
-        if (Object.keys(customPayload).length > 0) {
-          await saveCustomFieldValues(objectKey, data.id, customPayload);
-        }
-        const [enrichedRow] = await withCustomFields(supabase, def.table, [data]);
-        await runWorkflows(supabase, def.table, enrichedRow, null);
+        await runWorkflows(supabase, def.table, data as Record<string, unknown>, null);
         created++;
         for (const w of warnings) notes.push({ row: rowNum, level: "warning", message: w });
       }
@@ -298,15 +289,15 @@ async function buildCustomLookupLabelMaps(
   customFields: Map<string, CustomField>,
   rows: ImportRow[]
 ): Promise<Map<string, Map<string, string>>> {
-  const usedFieldIds = new Set<string>();
+  const usedFieldNames = new Set<string>();
   for (const row of rows) {
-    for (const key of Object.keys(row.customValues || {})) usedFieldIds.add(key);
+    for (const key of Object.keys(row.customValues || {})) usedFieldNames.add(key);
   }
 
   const result = new Map<string, Map<string, string>>();
 
   for (const field of customFields.values()) {
-    if (field.field_type !== "lookup" || !usedFieldIds.has(field.id) || !field.lookup_object) continue;
+    if (field.field_type !== "lookup" || !usedFieldNames.has(field.field_name) || !field.lookup_object) continue;
     const table = OBJECTS[field.lookup_object as ObjectKey]?.table;
     if (!table) continue;
     const { data } = await supabase.from(table).select("id, name").limit(5000);
@@ -315,7 +306,7 @@ async function buildCustomLookupLabelMaps(
       const label = r.name;
       if (typeof label === "string" && label) map.set(label.trim().toLowerCase(), r.id as string);
     }
-    result.set(field.id, map);
+    result.set(field.field_name, map);
   }
 
   return result;

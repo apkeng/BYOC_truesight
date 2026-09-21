@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { runWorkflows, withCustomFields, snapshotRecord } from "@/lib/workflows";
+import { runWorkflows, snapshotRecord } from "@/lib/workflows";
 import { runRecordTriggeredCadences } from "@/lib/cadences";
 import { OBJECTS, type ObjectKey } from "@/lib/objects";
 
@@ -10,6 +10,22 @@ export interface RecordActionResult {
   success: boolean;
   id?: string;
   error?: string;
+}
+
+/**
+ * Merges custom field values into the row payload.
+ *
+ * Custom fields are columns on the object's own table, so they are written in
+ * the same insert/update as the built-in fields - one round trip, one row, and
+ * the saved record already carries them when workflows and cadences read it.
+ * `customFieldValues` is keyed by field_name (the column name); the caller has
+ * already limited it to fields that exist on this object.
+ */
+function mergeFields(
+  fields: Record<string, unknown>,
+  customFieldValues: Record<string, unknown>
+): Record<string, unknown> {
+  return { ...fields, ...customFieldValues };
 }
 
 export async function createRecord(
@@ -22,7 +38,7 @@ export async function createRecord(
 
   const { data, error } = await supabase
     .from(def.table)
-    .insert(fields)
+    .insert(mergeFields(fields, customFieldValues))
     .select()
     .single();
 
@@ -30,12 +46,11 @@ export async function createRecord(
     return { success: false, error: error?.message || "Insert failed" };
   }
 
-  await saveCustomFieldValues(objectKey, data.id, customFieldValues);
-  const [enrichedRecord] = await withCustomFields(supabase, def.table, [data]);
+  const record = data as Record<string, unknown>;
   // null (not undefined): a create genuinely has no prior value, which is what
   // lets an "on_change" workflow treat the initial value as a change.
-  await runWorkflows(supabase, def.table, enrichedRecord, null);
-  await runRecordTriggeredCadences(supabase, def.table, enrichedRecord, "created");
+  await runWorkflows(supabase, def.table, record, null);
+  await runRecordTriggeredCadences(supabase, def.table, record, "created");
 
   revalidatePath(`/${objectKey}`);
   return { success: true, id: data.id };
@@ -54,7 +69,7 @@ export async function updateRecord(
 
   const { data, error } = await supabase
     .from(def.table)
-    .update(fields)
+    .update(mergeFields(fields, customFieldValues))
     .eq("id", id)
     .select()
     .single();
@@ -63,10 +78,9 @@ export async function updateRecord(
     return { success: false, error: error?.message || "Update failed" };
   }
 
-  await saveCustomFieldValues(objectKey, id, customFieldValues);
-  const [enrichedRecord] = await withCustomFields(supabase, def.table, [data]);
-  await runWorkflows(supabase, def.table, enrichedRecord, previous);
-  await runRecordTriggeredCadences(supabase, def.table, enrichedRecord, "updated");
+  const record = data as Record<string, unknown>;
+  await runWorkflows(supabase, def.table, record, previous);
+  await runRecordTriggeredCadences(supabase, def.table, record, "updated");
 
   revalidatePath(`/${objectKey}`);
   revalidatePath(`/${objectKey}/${id}`);
@@ -118,45 +132,4 @@ export async function deleteRecords(
 
   revalidatePath(`/${objectKey}`);
   return { success: true, deleted: count ?? ids.length };
-}
-
-export async function saveCustomFieldValues(
-  objectKey: ObjectKey,
-  recordId: string,
-  values: Record<string, unknown>
-) {
-  const entries = Object.entries(values);
-  if (entries.length === 0) return;
-
-  const supabase = await createClient();
-
-  for (const [customFieldId, rawValue] of entries) {
-    const { data: field } = await supabase
-      .from("custom_fields")
-      .select("*")
-      .eq("id", customFieldId)
-      .single();
-    if (!field) continue;
-
-    const payload: Record<string, unknown> = {
-      custom_field_id: customFieldId,
-      record_id: recordId,
-      value_text: null,
-      value_number: null,
-      value_lookup: null,
-      updated_at: new Date().toISOString(),
-    };
-
-    if (field.field_type === "number") {
-      payload.value_number = rawValue === "" || rawValue == null ? null : Number(rawValue);
-    } else if (field.field_type === "lookup") {
-      payload.value_lookup = rawValue || null;
-    } else {
-      payload.value_text = rawValue == null ? null : String(rawValue);
-    }
-
-    await supabase
-      .from("custom_field_values")
-      .upsert(payload, { onConflict: "custom_field_id,record_id" });
-  }
 }
