@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Workflow } from "./types";
 import { substitute, substituteDeep } from "./template";
+import { sendEmailAlert } from "./email-alerts";
 
 /**
  * Decides whether a workflow/trigger config fires for a record.
@@ -117,6 +118,23 @@ export async function runWorkflows(
       } else {
         console.warn(
           `[workflow ${workflow.id}] no recipient: "${notifyField}" is empty on record ${record.id}`
+        );
+      }
+    } else if (workflow.trigger_type === "email_alert") {
+      const alertId = config.email_alert_id as string | undefined;
+      if (!alertId) {
+        console.warn(`[workflow ${workflow.id}] email_alert has no email_alert_id`);
+        continue;
+      }
+      // Awaited, unlike the external_* calls below: an alert that fails should
+      // say so in email_log before the request ends, and admins expect the
+      // alert to have gone out by the time the save returns.
+      const { sent, failed, error } = await sendEmailAlert(alertId, objectName, record);
+      if (error) {
+        console.error(`[workflow ${workflow.id}] email alert not sent: ${error}`);
+      } else if (failed > 0) {
+        console.error(
+          `[workflow ${workflow.id}] email alert: ${sent} sent, ${failed} failed - see email_log`
         );
       }
     } else if (workflow.trigger_type === "external_post" || workflow.trigger_type === "external_get") {

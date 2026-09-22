@@ -49,7 +49,8 @@ export type WorkflowTriggerType =
   | "field_update"
   | "external_post"
   | "external_get"
-  | "notification";
+  | "notification"
+  | "email_alert";
 
 /**
  * How a workflow's when_field/when_value condition is evaluated.
@@ -65,6 +66,28 @@ export interface Workflow {
   trigger_type: WorkflowTriggerType;
   config: Record<string, unknown>;
   active: boolean;
+}
+
+/**
+ * Who an email alert goes to. Deliberately one or the other, never both: the
+ * two audiences read very differently, so they want separate templates.
+ *   "internal" - the hand-picked CRM users in recipient_user_ids
+ *   "lead"     - the lead the workflow fired on
+ */
+export type EmailAlertRecipientType = "internal" | "lead";
+
+/** A reusable email action a workflow can fire. See email_alerts. */
+export interface EmailAlert {
+  id: string;
+  name: string;
+  object_name: string;
+  template_id: string | null;
+  recipient_type: EmailAlertRecipientType;
+  recipient_user_ids: string[];
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /** A call-to-action link or poster image attached to an email template. */

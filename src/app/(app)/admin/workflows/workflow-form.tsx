@@ -17,7 +17,7 @@ import {
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { OBJECTS, OBJECT_KEYS } from "@/lib/objects";
 import { createClient } from "@/lib/supabase/client";
-import type { CustomField } from "@/lib/types";
+import type { CustomField, EmailAlert } from "@/lib/types";
 import { createWorkflow } from "./actions";
 import type { WorkflowTriggerType, WorkflowWhenMode } from "@/lib/types";
 
@@ -48,6 +48,12 @@ const EXAMPLES: Record<WorkflowTriggerType, string> = {
   external_get: `{
   "url": "https://example.com/ping?org={{name}}"
 }`,
+  email_alert: `{
+  "when_field": "lead_stage",
+  "when_value": "Hot",
+  "when_mode": "on_change",
+  "email_alert_id": ""
+}`,
 };
 
 export function WorkflowForm() {
@@ -58,6 +64,7 @@ export function WorkflowForm() {
   const [triggerType, setTriggerType] = useState<WorkflowTriggerType>("field_update");
   const [config, setConfig] = useState(EXAMPLES.field_update);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [emailAlerts, setEmailAlerts] = useState<EmailAlert[]>([]);
 
   useEffect(() => {
     let ignore = false;
@@ -67,6 +74,24 @@ export function WorkflowForm() {
       .eq("object_name", OBJECTS[objectName].table)
       .then(({ data }) => {
         if (!ignore) setCustomFields((data as CustomField[]) || []);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [objectName]);
+
+  // Alerts are scoped to the object they were built for, so a workflow can only
+  // pick one whose template's merge fields actually resolve on this record.
+  useEffect(() => {
+    let ignore = false;
+    createClient()
+      .from("email_alerts")
+      .select("*")
+      .eq("object_name", OBJECTS[objectName].table)
+      .eq("active", true)
+      .order("name")
+      .then(({ data }) => {
+        if (!ignore) setEmailAlerts((data as EmailAlert[]) || []);
       });
     return () => {
       ignore = true;
@@ -101,6 +126,14 @@ export function WorkflowForm() {
     setConfig(JSON.stringify({ ...parsedConfig, when_mode: v }, null, 2));
   }
 
+  const selectedAlertId =
+    typeof parsedConfig?.email_alert_id === "string" ? parsedConfig.email_alert_id : "";
+
+  function onAlertChange(v: string) {
+    if (!parsedConfig) return;
+    setConfig(JSON.stringify({ ...parsedConfig, email_alert_id: v }, null, 2));
+  }
+
   function onTriggerChange(v: WorkflowTriggerType) {
     setTriggerType(v);
     setConfig(EXAMPLES[v]);
@@ -127,6 +160,10 @@ export function WorkflowForm() {
     }
     if (parsed.when_mode === "on_change" && !parsed.when_field) {
       toast.error('"Only when it changes" needs a when_field to watch');
+      return;
+    }
+    if (triggerType === "email_alert" && !parsed.email_alert_id) {
+      toast.error("Pick the email alert this workflow should send");
       return;
     }
     if (unknown.length > 0) {
@@ -188,12 +225,39 @@ export function WorkflowForm() {
                 <SelectContent>
                   <SelectItem value="field_update">Field update</SelectItem>
                   <SelectItem value="notification">Notification</SelectItem>
+                  <SelectItem value="email_alert">Email alert</SelectItem>
                   <SelectItem value="external_post">External POST</SelectItem>
                   <SelectItem value="external_get">External GET</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
+          {triggerType === "email_alert" && (
+            <div className="space-y-1.5">
+              <Label>Email alert</Label>
+              <Select
+                value={selectedAlertId}
+                disabled={!parsedConfig || emailAlerts.length === 0}
+                onValueChange={(v) => v && onAlertChange(v as string)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Pick an email alert" />
+                </SelectTrigger>
+                <SelectContent>
+                  {emailAlerts.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {emailAlerts.length === 0
+                  ? `No active email alerts for ${OBJECTS[objectName].labelPlural} yet - create one under Admin → Email Templates.`
+                  : "Sends that alert's template to its recipients whenever this workflow's condition matches."}
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>Run when</Label>
             <Select
