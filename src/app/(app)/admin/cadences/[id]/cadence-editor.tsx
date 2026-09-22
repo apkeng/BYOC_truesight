@@ -23,6 +23,7 @@ import {
   saveCadenceSteps,
   saveCadenceTriggers,
   runCadenceEngineNow,
+  enrollMatchingLeadsNow,
   type StepInput,
   type TriggerInput,
 } from "../actions";
@@ -101,6 +102,18 @@ function triggerToRow(t: CadenceTrigger): TriggerRow {
     interval_minutes: Number(c.interval_minutes) || 60,
   };
 }
+
+/**
+ * Says plainly when each trigger type fires. The three behave very differently
+ * and the difference is not guessable from the labels - a record_* trigger only
+ * ever sees a lead that is saved after the trigger exists, which is why setting
+ * one up and clicking "Run cadence engine now" enrolls nobody.
+ */
+const TRIGGER_HELP: Record<CadenceTriggerType, string> = {
+  record_created: "Fires when a new lead is created and matches. Leads that already exist are not enrolled - use Enroll matching leads now for those.",
+  record_updated: "Fires when an existing lead is saved and matches. Nothing happens until a lead is actually edited - use Enroll matching leads now to start on the leads you already have.",
+  scheduled: "The engine checks every lead when this schedule comes due and enrolls the matches. Use Enroll matching leads now if you do not want to wait for the next due time.",
+};
 
 let keyCounter = 0;
 function newKey() {
@@ -188,31 +201,37 @@ export function CadenceEditor({
     setTriggers((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function saveAll() {
+  /**
+   * Validates and writes the whole cadence, returning whether it stuck.
+   * Split out of saveAll so "Enroll matching leads now" can save first - the
+   * leads it enrolls are then guaranteed to match the condition as stored,
+   * not a half-edited one still sitting in the form.
+   */
+  async function persist(): Promise<boolean> {
     // Validate before touching the server.
     for (const s of steps) {
       if (s.step_type === "email" && !s.email_template_id) {
         toast.error("Every email step needs a template selected");
-        return;
+        return false;
       }
       if (s.step_type === "external_api") {
         if (!s.url.trim()) {
           toast.error("Every external API step needs a URL");
-          return;
+          return false;
         }
         try {
           JSON.parse(s.headers_json || "{}");
           JSON.parse(s.body_json || "{}");
         } catch {
           toast.error("Headers and body must be valid JSON");
-          return;
+          return false;
         }
       }
     }
     for (const t of triggers) {
       if (t.trigger_type === "scheduled" && t.schedule_type === "interval" && t.interval_minutes < 1) {
         toast.error("Interval must be at least 1 minute");
-        return;
+        return false;
       }
     }
 
@@ -246,18 +265,54 @@ export function CadenceEditor({
           : { when_field: t.when_field || undefined, when_value: t.when_value || undefined },
     }));
 
+    const results = await Promise.all([
+      updateCadence(cadence.id, { name, description, active }),
+      saveCadenceSteps(cadence.id, stepInputs),
+      saveCadenceTriggers(cadence.id, triggerInputs),
+    ]);
+    const failed = results.find((r) => !r.success);
+    if (failed) {
+      toast.error(failed.error || "Failed to save");
+      return false;
+    }
+    return true;
+  }
+
+  function saveAll() {
     startTransition(async () => {
-      const results = await Promise.all([
-        updateCadence(cadence.id, { name, description, active }),
-        saveCadenceSteps(cadence.id, stepInputs),
-        saveCadenceTriggers(cadence.id, triggerInputs),
-      ]);
-      const failed = results.find((r) => !r.success);
-      if (failed) {
-        toast.error(failed.error || "Failed to save");
+      if (!(await persist())) return;
+      toast.success("Cadence saved");
+      router.refresh();
+    });
+  }
+
+  /**
+   * Applies one trigger's condition to the leads that already exist. Neither
+   * record_created/record_updated (which only fire on a lead's own save) nor a
+   * not-yet-due scheduled trigger will ever pick those up on their own, so this
+   * is the only way to start a cadence on the leads already in the CRM.
+   */
+  function enrollNow(index: number) {
+    const t = triggers[index];
+    startTransition(async () => {
+      if (!(await persist())) return;
+      const result = await enrollMatchingLeadsNow(cadence.id, {
+        when_field: t.when_field || undefined,
+        when_value: t.when_value || undefined,
+      });
+      if (!result.success) {
+        toast.error(result.error || "Failed to enroll");
         return;
       }
-      toast.success("Cadence saved");
+      const matched = result.matched ?? 0;
+      const enrolled = result.enrolled ?? 0;
+      if (matched === 0) {
+        toast.warning("No leads match this condition");
+      } else if (enrolled === 0) {
+        toast.info(`All ${matched} matching leads are already enrolled`);
+      } else {
+        toast.success(`Enrolled ${enrolled} of ${matched} matching leads`);
+      }
       router.refresh();
     });
   }
@@ -305,8 +360,10 @@ export function CadenceEditor({
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Leads enroll automatically when a trigger matches. Leave the field blank to match every lead.
-            Combine with manual enrollment via Lead Lists → Send to cadence.
+            Leave the field blank to match every lead. Each trigger type fires at a different moment - see
+            the note under each one. &ldquo;Run cadence engine now&rdquo; only delivers due steps and checks
+            scheduled triggers; it never enrolls for an on-created/on-updated trigger. You can also enroll by
+            hand via Lead Lists → Send to cadence.
           </p>
           {triggers.map((t, i) => (
             <div key={t.key} className="space-y-2 rounded-md border p-3">
@@ -406,6 +463,11 @@ export function CadenceEditor({
                   </div>
                 </div>
               )}
+
+              <p className="text-xs text-muted-foreground">{TRIGGER_HELP[t.trigger_type]}</p>
+              <Button variant="outline" size="sm" disabled={isPending} onClick={() => enrollNow(i)}>
+                Enroll matching leads now
+              </Button>
             </div>
           ))}
           <Button variant="outline" size="sm" onClick={addTrigger}>
@@ -575,7 +637,7 @@ export function CadenceEditor({
               {recentRuns.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={3} className="text-center text-muted-foreground">
-                    No activity yet — enroll a lead or click &quot;Run cadence engine now&quot;.
+                    No activity yet — enroll leads with a trigger’s &quot;Enroll matching leads now&quot;, then click &quot;Run cadence engine now&quot; to deliver the first step.
                   </TableCell>
                 </TableRow>
               )}

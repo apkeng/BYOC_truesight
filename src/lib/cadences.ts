@@ -13,7 +13,7 @@ export async function enrollLeads(
   cadenceId: string,
   leadIds: string[],
   enrolledBy: string | null
-): Promise<{ enrolled: number }> {
+): Promise<{ enrolled: number; error?: string }> {
   if (leadIds.length === 0) return { enrolled: 0 };
 
   const { data: firstStep } = await supabase
@@ -42,8 +42,52 @@ export async function enrollLeads(
     .upsert(rows, { onConflict: "cadence_id,lead_id", ignoreDuplicates: true })
     .select("id");
 
-  if (error) return { enrolled: 0 };
+  if (error) {
+    // Never swallow this: a failed enrolment is indistinguishable from "nothing
+    // matched" to the caller, and that is exactly what makes a cadence look
+    // silently broken.
+    console.error(`[cadence ${cadenceId}] enrolment failed: ${error.message}`);
+    return { enrolled: 0, error: error.message };
+  }
   return { enrolled: data?.length ?? 0 };
+}
+
+/**
+ * Evaluates a trigger's condition against every lead and enrols the matches,
+ * skipping leads already enrolled in that cadence (in any status).
+ *
+ * This is the only bulk-enrolment path: the cron's scheduled triggers and the
+ * admin "Enroll matching leads now" button both come through here, so a manual
+ * run and a scheduled run always pick the same leads. `config` is the trigger's
+ * config - an empty/blank when_field matches every lead, per matches().
+ */
+export async function enrollMatchingLeads(
+  supabase: SupabaseClient,
+  cadenceId: string,
+  config: Record<string, unknown>
+): Promise<{ matched: number; enrolled: number; error?: string }> {
+  // select("*") already carries custom fields - they are columns on leads.
+  const { data: candidateRecords, error: leadsError } = await supabase.from("leads").select("*");
+  if (leadsError) return { matched: 0, enrolled: 0, error: leadsError.message };
+
+  const matchingIds = ((candidateRecords || []) as Record<string, unknown>[])
+    .filter((r) => matches(config || {}, r))
+    .map((r) => r.id as string);
+
+  if (matchingIds.length === 0) return { matched: 0, enrolled: 0 };
+
+  const { data: existing } = await supabase
+    .from("cadence_enrollments")
+    .select("lead_id")
+    .eq("cadence_id", cadenceId)
+    .in("lead_id", matchingIds);
+  const already = new Set((existing || []).map((e) => e.lead_id as string));
+  const toEnroll = matchingIds.filter((id) => !already.has(id));
+
+  if (toEnroll.length === 0) return { matched: matchingIds.length, enrolled: 0 };
+
+  const { enrolled, error } = await enrollLeads(supabase, cadenceId, toEnroll, null);
+  return { matched: matchingIds.length, enrolled, error };
 }
 
 /**
@@ -218,25 +262,12 @@ export async function tickCadenceEngine(supabase: SupabaseClient): Promise<Caden
       .single();
 
     if (cadence?.active) {
-      // select("*") already carries custom fields - they are columns on leads.
-      const { data: candidateRecords } = await supabase.from("leads").select("*");
-      const matchingIds = ((candidateRecords || []) as Record<string, unknown>[])
-        .filter((r: Record<string, unknown>) => matches(trigger.config || {}, r))
-        .map((r: Record<string, unknown>) => r.id as string);
-
-      if (matchingIds.length > 0) {
-        const { data: existing } = await supabase
-          .from("cadence_enrollments")
-          .select("lead_id")
-          .eq("cadence_id", trigger.cadence_id)
-          .in("lead_id", matchingIds);
-        const already = new Set((existing || []).map((e) => e.lead_id as string));
-        const toEnroll = matchingIds.filter((id) => !already.has(id));
-        if (toEnroll.length > 0) {
-          const { enrolled } = await enrollLeads(supabase, trigger.cadence_id, toEnroll, null);
-          summary.enrolled += enrolled;
-        }
-      }
+      const { enrolled } = await enrollMatchingLeads(
+        supabase,
+        trigger.cadence_id,
+        trigger.config || {}
+      );
+      summary.enrolled += enrolled;
     }
 
     await supabase

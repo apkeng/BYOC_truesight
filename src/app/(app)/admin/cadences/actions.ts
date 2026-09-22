@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { tickCadenceEngine, type CadenceTickSummary } from "@/lib/cadences";
+import { enrollMatchingLeads, tickCadenceEngine, type CadenceTickSummary } from "@/lib/cadences";
 import type { CadenceStepType, CadenceTriggerType, ExternalApiConfig } from "@/lib/types";
 
 export interface ActionResult {
@@ -107,19 +107,72 @@ export async function saveCadenceTriggers(cadenceId: string, triggers: TriggerIn
   return { success: true };
 }
 
-export async function runCadenceEngineNow(): Promise<
-  ActionResult & { summary?: CadenceTickSummary }
-> {
+/** Shared admin gate for the actions below, which run with a service-role client. */
+async function requireAdmin(): Promise<string | null> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { success: false, error: "Unauthorized" };
+  if (!user) return "Unauthorized";
 
   const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
-  if (!profile || profile.role !== "admin") return { success: false, error: "Forbidden" };
+  if (!profile || profile.role !== "admin") return "Forbidden";
+  return null;
+}
+
+export async function runCadenceEngineNow(): Promise<
+  ActionResult & { summary?: CadenceTickSummary }
+> {
+  const denied = await requireAdmin();
+  if (denied) return { success: false, error: denied };
 
   const summary = await tickCadenceEngine(createAdminClient());
   revalidatePath("/admin/cadences");
   return { success: true, summary };
+}
+
+/**
+ * Enrolls every lead currently matching a trigger's condition, whatever the
+ * trigger's type.
+ *
+ * record_created/record_updated triggers only ever fire on a lead's own
+ * save, and a scheduled trigger waits for its next due time, so neither
+ * touches the leads already sitting in the CRM when the cadence is set up.
+ * This is the explicit "apply this trigger to the leads I already have"
+ * action - deliberately a button rather than something the engine does on
+ * its own, since a blank condition matches every lead.
+ */
+export async function enrollMatchingLeadsNow(
+  cadenceId: string,
+  config: Record<string, unknown>
+): Promise<ActionResult & { matched?: number; enrolled?: number }> {
+  const denied = await requireAdmin();
+  if (denied) return { success: false, error: denied };
+
+  const admin = createAdminClient();
+  const { data: cadence } = await admin
+    .from("cadences")
+    .select("active")
+    .eq("id", cadenceId)
+    .maybeSingle();
+  if (!cadence) return { success: false, error: "Cadence not found" };
+  if (!cadence.active) {
+    return { success: false, error: "Turn the cadence on before enrolling leads into it" };
+  }
+
+  const { data: steps } = await admin
+    .from("cadence_steps")
+    .select("id")
+    .eq("cadence_id", cadenceId)
+    .eq("active", true)
+    .limit(1);
+  if (!steps || steps.length === 0) {
+    return { success: false, error: "Add at least one step before enrolling leads" };
+  }
+
+  const { matched, enrolled, error } = await enrollMatchingLeads(admin, cadenceId, config || {});
+  if (error) return { success: false, error };
+
+  revalidatePath(`/admin/cadences/${cadenceId}`);
+  return { success: true, matched, enrolled };
 }
