@@ -52,6 +52,13 @@ export function AlertFields({
 
   const selectedTemplate = templates.find((t) => t.id === value.template_id) || null;
 
+  // base-ui's Select.Value renders the raw value unless it is given a formatter,
+  // which would show a template's uuid and the bare word "internal".
+  const RECIPIENT_LABELS: Record<EmailAlertRecipientType, string> = {
+    internal: "Internal users",
+    lead: "The lead itself",
+  };
+
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
@@ -71,7 +78,9 @@ export function AlertFields({
           onValueChange={(v) => v && onChange({ template_id: v as string })}
         >
           <SelectTrigger className="w-full">
-            <SelectValue placeholder="Pick a template" />
+            <SelectValue placeholder="Pick a template">
+              {(v) => templates.find((t) => t.id === v)?.name ?? "Pick a template"}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {templates.map((t) => (
@@ -100,7 +109,9 @@ export function AlertFields({
           onValueChange={(v) => v && onChange({ recipient_type: v as EmailAlertRecipientType })}
         >
           <SelectTrigger className="w-full">
-            <SelectValue />
+            <SelectValue>
+              {(v) => RECIPIENT_LABELS[v as EmailAlertRecipientType] ?? "Internal users"}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="internal">Internal users</SelectItem>

@@ -241,7 +241,9 @@ export function WorkflowForm() {
                 onValueChange={(v) => v && onAlertChange(v as string)}
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Pick an email alert" />
+                  <SelectValue placeholder="Pick an email alert">
+                    {(v) => emailAlerts.find((a) => a.id === v)?.name ?? "Pick an email alert"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {emailAlerts.map((a) => (
