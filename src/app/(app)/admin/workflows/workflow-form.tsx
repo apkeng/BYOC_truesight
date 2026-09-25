@@ -17,13 +17,34 @@ import {
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { OBJECTS, OBJECT_KEYS } from "@/lib/objects";
 import { createClient } from "@/lib/supabase/client";
+import {
+  SCHEDULABLE_TRIGGER_TYPES,
+  VALUELESS_OPERATORS,
+  WHEN_OPERATOR_LABELS,
+} from "@/lib/types";
 import type { CustomField, EmailAlert } from "@/lib/types";
 import { createWorkflow } from "./actions";
-import type { WorkflowTriggerType, WorkflowWhenMode } from "@/lib/types";
+import type {
+  WorkflowRunMode,
+  WorkflowTriggerType,
+  WorkflowWhenMode,
+  WorkflowWhenOperator,
+} from "@/lib/types";
+
+const TRIGGER_LABELS: Record<WorkflowTriggerType, string> = {
+  field_update: "Field update",
+  notification: "Notification",
+  email_alert: "Email alert",
+  external_post: "External POST",
+  external_get: "External GET",
+};
+
+const ALL_TRIGGER_TYPES = Object.keys(TRIGGER_LABELS) as WorkflowTriggerType[];
 
 const EXAMPLES: Record<WorkflowTriggerType, string> = {
   field_update: `{
   "when_field": "stage",
+  "when_operator": "equals",
   "when_value": "Closed/Closed Lost",
   "when_mode": "always",
   "set_field": "owner",
@@ -31,6 +52,7 @@ const EXAMPLES: Record<WorkflowTriggerType, string> = {
 }`,
   notification: `{
   "when_field": "stage",
+  "when_operator": "equals",
   "when_value": "Contracting",
   "when_mode": "on_change",
   "notify_user_field": "owner",
@@ -39,6 +61,7 @@ const EXAMPLES: Record<WorkflowTriggerType, string> = {
 }`,
   external_post: `{
   "when_field": "stage",
+  "when_operator": "equals",
   "when_value": "Onboarded",
   "when_mode": "on_change",
   "url": "https://example.com/webhook",
@@ -50,6 +73,7 @@ const EXAMPLES: Record<WorkflowTriggerType, string> = {
 }`,
   email_alert: `{
   "when_field": "lead_stage",
+  "when_operator": "equals",
   "when_value": "Hot",
   "when_mode": "on_change",
   "email_alert_id": ""
@@ -65,6 +89,10 @@ export function WorkflowForm() {
   const [config, setConfig] = useState(EXAMPLES.field_update);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [emailAlerts, setEmailAlerts] = useState<EmailAlert[]>([]);
+  const [runMode, setRunMode] = useState<WorkflowRunMode>("on_save");
+  const [scheduleType, setScheduleType] = useState<"daily" | "interval">("daily");
+  const [atTime, setAtTime] = useState("09:00");
+  const [intervalMinutes, setIntervalMinutes] = useState(60);
 
   useEffect(() => {
     let ignore = false;
@@ -126,6 +154,26 @@ export function WorkflowForm() {
     setConfig(JSON.stringify({ ...parsedConfig, when_mode: v }, null, 2));
   }
 
+  const rawOperator = parsedConfig?.when_operator;
+  const whenOperator: WorkflowWhenOperator =
+    rawOperator === "not_equals" || rawOperator === "is_blank" || rawOperator === "is_not_blank"
+      ? rawOperator
+      : "equals";
+
+  /**
+   * Rewrites when_operator in the JSON, and drops when_value along with it for
+   * the blank operators - leaving a stale value behind reads as though it still
+   * matters, and it is the first thing an admin would blame when the workflow
+   * fires on records they did not expect.
+   */
+  function onOperatorChange(v: WorkflowWhenOperator) {
+    if (!parsedConfig) return;
+    const next: Record<string, unknown> = { ...parsedConfig, when_operator: v };
+    if (VALUELESS_OPERATORS.includes(v)) delete next.when_value;
+    else if (next.when_value === undefined) next.when_value = "";
+    setConfig(JSON.stringify(next, null, 2));
+  }
+
   const selectedAlertId =
     typeof parsedConfig?.email_alert_id === "string" ? parsedConfig.email_alert_id : "";
 
@@ -137,6 +185,20 @@ export function WorkflowForm() {
   function onTriggerChange(v: WorkflowTriggerType) {
     setTriggerType(v);
     setConfig(EXAMPLES[v]);
+  }
+
+  const availableTriggerTypes = runMode === "scheduled" ? SCHEDULABLE_TRIGGER_TYPES : ALL_TRIGGER_TYPES;
+
+  /**
+   * Switching to a schedule can strand the form on an action a sweep cannot
+   * perform, so the external ones fall back to field_update rather than leaving
+   * a select showing an option that is no longer in its own list.
+   */
+  function onRunModeChange(v: WorkflowRunMode) {
+    setRunMode(v);
+    if (v === "scheduled" && !SCHEDULABLE_TRIGGER_TYPES.includes(triggerType)) {
+      onTriggerChange("field_update");
+    }
   }
 
   function submit(e: React.FormEvent) {
@@ -162,9 +224,30 @@ export function WorkflowForm() {
       toast.error('"Only when it changes" needs a when_field to watch');
       return;
     }
+    if (
+      parsed.when_operator !== undefined &&
+      !["equals", "not_equals", "is_blank", "is_not_blank"].includes(String(parsed.when_operator))
+    ) {
+      toast.error('when_operator must be "equals", "not_equals", "is_blank" or "is_not_blank"');
+      return;
+    }
+    if (VALUELESS_OPERATORS.includes(parsed.when_operator as WorkflowWhenOperator) && !parsed.when_field) {
+      toast.error(`"${WHEN_OPERATOR_LABELS[whenOperator]}" needs a when_field to check`);
+      return;
+    }
     if (triggerType === "email_alert" && !parsed.email_alert_id) {
       toast.error("Pick the email alert this workflow should send");
       return;
+    }
+    if (runMode === "scheduled") {
+      if (!SCHEDULABLE_TRIGGER_TYPES.includes(triggerType)) {
+        toast.error(`${TRIGGER_LABELS[triggerType]} cannot run on a schedule`);
+        return;
+      }
+      if (scheduleType === "interval" && intervalMinutes < 1) {
+        toast.error("Interval must be at least 1 minute");
+        return;
+      }
     }
     if (unknown.length > 0) {
       toast.error(
@@ -179,6 +262,11 @@ export function WorkflowForm() {
         object_name: objectName,
         trigger_type: triggerType,
         config: parsed,
+        run_mode: runMode,
+        schedule_config:
+          scheduleType === "interval"
+            ? { schedule_type: "interval", interval_minutes: intervalMinutes }
+            : { schedule_type: "daily", at_time: atTime },
       });
       if (!result.success) toast.error(result.error || "Failed to create workflow");
       else {
@@ -223,14 +311,66 @@ export function WorkflowForm() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="field_update">Field update</SelectItem>
-                  <SelectItem value="notification">Notification</SelectItem>
-                  <SelectItem value="email_alert">Email alert</SelectItem>
-                  <SelectItem value="external_post">External POST</SelectItem>
-                  <SelectItem value="external_get">External GET</SelectItem>
+                  {availableTriggerTypes.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {TRIGGER_LABELS[t]}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Run mode</Label>
+            <Select value={runMode} onValueChange={(v) => v && onRunModeChange(v as WorkflowRunMode)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="on_save">When a record is created or updated</SelectItem>
+                <SelectItem value="scheduled">On a schedule</SelectItem>
+              </SelectContent>
+            </Select>
+            {runMode === "scheduled" && (
+              <div className="space-y-2 rounded-md border p-3">
+                <Select
+                  value={scheduleType}
+                  onValueChange={(v) => v && setScheduleType(v as "daily" | "interval")}
+                >
+                  <SelectTrigger className="w-56">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Daily at a time (UTC)</SelectItem>
+                    <SelectItem value="interval">Every N minutes</SelectItem>
+                  </SelectContent>
+                </Select>
+                {scheduleType === "daily" ? (
+                  <Input
+                    type="time"
+                    className="w-40"
+                    value={atTime}
+                    onChange={(e) => setAtTime(e.target.value)}
+                  />
+                ) : (
+                  <Input
+                    type="number"
+                    min={1}
+                    className="w-40"
+                    value={intervalMinutes}
+                    onChange={(e) => setIntervalMinutes(Number(e.target.value))}
+                  />
+                )}
+                <p className="text-xs text-muted-foreground">
+                  At each due time the engine checks every{" "}
+                  {OBJECTS[objectName].labelPlural.toLowerCase()} record and runs the action on all
+                  that match the condition — every due run, not just the ones that newly match. Only
+                  field updates, notifications and email alerts can be scheduled. Capped at 500
+                  records per run.
+                </p>
+              </div>
+            )}
           </div>
           {triggerType === "email_alert" && (
             <div className="space-y-1.5">
@@ -261,26 +401,57 @@ export function WorkflowForm() {
             </div>
           )}
           <div className="space-y-1.5">
-            <Label>Run when</Label>
+            <Label>Compare the field by</Label>
             <Select
-              value={whenMode}
+              value={whenOperator}
               disabled={!parsedConfig}
-              onValueChange={(v) => v && onWhenModeChange(v as WorkflowWhenMode)}
+              onValueChange={(v) => v && onOperatorChange(v as WorkflowWhenOperator)}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="always">Every save while the condition matches</SelectItem>
-                <SelectItem value="on_change">Only when the field changes to that value</SelectItem>
+                <SelectItem value="equals">{WHEN_OPERATOR_LABELS.equals}</SelectItem>
+                <SelectItem value="not_equals">{WHEN_OPERATOR_LABELS.not_equals}</SelectItem>
+                <SelectItem value="is_blank">{WHEN_OPERATOR_LABELS.is_blank}</SelectItem>
+                <SelectItem value="is_not_blank">{WHEN_OPERATOR_LABELS.is_not_blank}</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              {whenMode === "on_change"
-                ? "Fires once, on the save that moves the field into the value. A record already sitting at that value stays quiet."
-                : "Re-fires on every save while the field holds the value, so a record saved repeatedly triggers repeatedly."}
+              {VALUELESS_OPERATORS.includes(whenOperator)
+                ? `Checks only whether when_field has been filled in — when_value is ignored and has been removed from the config. Empty text and an empty tag list both count as blank; 0 does not.`
+                : `Compares when_field against when_value.`}
             </p>
           </div>
+
+          {runMode === "on_save" ? (
+            <div className="space-y-1.5">
+              <Label>Run when</Label>
+              <Select
+                value={whenMode}
+                disabled={!parsedConfig}
+                onValueChange={(v) => v && onWhenModeChange(v as WorkflowWhenMode)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="always">Every save while the condition matches</SelectItem>
+                  <SelectItem value="on_change">Only when the condition starts matching</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {whenMode === "on_change"
+                  ? "Fires once, on the save that moves the record into the condition. A record already matching stays quiet."
+                  : "Re-fires on every save while the record matches, so a record saved repeatedly triggers repeatedly."}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              A scheduled workflow has no before-and-after to compare, so{" "}
+              <code>when_mode</code> is ignored — every due run acts on every matching record.
+            </p>
+          )}
           <div className="space-y-1.5">
             <Label>Config (JSON)</Label>
             <Textarea

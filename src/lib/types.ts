@@ -59,6 +59,41 @@ export type WorkflowTriggerType =
  */
 export type WorkflowWhenMode = "always" | "on_change";
 
+/**
+ * How when_field is compared. Shared by workflow conditions and cadence
+ * triggers, which both run through matches(). The blank operators ignore
+ * when_value. Absent means "equals", so pre-existing configs are unchanged.
+ */
+export type WorkflowWhenOperator = "equals" | "not_equals" | "is_blank" | "is_not_blank";
+
+/** Operators that need no when_value, so the UI hides the value input. */
+export const VALUELESS_OPERATORS: WorkflowWhenOperator[] = ["is_blank", "is_not_blank"];
+
+export const WHEN_OPERATOR_LABELS: Record<WorkflowWhenOperator, string> = {
+  equals: "equals",
+  not_equals: "does not equal",
+  is_blank: "is blank",
+  is_not_blank: "is not blank",
+};
+
+/**
+ * When a workflow runs.
+ *   "on_save"   - after a record is created or updated (the original behaviour)
+ *   "scheduled" - swept by the cron at a due time, across every matching record
+ */
+export type WorkflowRunMode = "on_save" | "scheduled";
+
+/**
+ * The actions a scheduled workflow may take. External calls are deliberately
+ * excluded: a sweep can match hundreds of records, and firing that many
+ * webhooks from a cron tick is a different feature with different needs.
+ */
+export const SCHEDULABLE_TRIGGER_TYPES: WorkflowTriggerType[] = [
+  "field_update",
+  "notification",
+  "email_alert",
+];
+
 export interface Workflow {
   id: string;
   name: string;
@@ -66,6 +101,11 @@ export interface Workflow {
   trigger_type: WorkflowTriggerType;
   config: Record<string, unknown>;
   active: boolean;
+  /** Absent on rows written before scheduling existed; reads as "on_save". */
+  run_mode?: WorkflowRunMode;
+  /** Only meaningful when run_mode is "scheduled". See lib/schedule.ts. */
+  schedule_config?: Record<string, unknown>;
+  last_run_at?: string | null;
 }
 
 /**

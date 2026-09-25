@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { matches } from "./workflows";
+import { isScheduleDue } from "./schedule";
 import { substitute, substituteDeep } from "./template";
 import { getResend, EMAIL_FROM } from "./resend";
 import { buildEmailHtml, buildResendAttachments } from "./email-render";
@@ -129,22 +130,7 @@ export async function runRecordTriggeredCadences(
 }
 
 function isScheduledTriggerDue(trigger: CadenceTrigger, now: Date): boolean {
-  const config = trigger.config as Record<string, unknown>;
-  const lastRun = trigger.last_run_at ? new Date(trigger.last_run_at) : null;
-
-  if (config.schedule_type === "interval") {
-    const intervalMinutes = Number(config.interval_minutes) || 60;
-    if (!lastRun) return true;
-    return now.getTime() - lastRun.getTime() >= intervalMinutes * 60000;
-  }
-
-  // daily
-  const atTime = typeof config.at_time === "string" ? config.at_time : "09:00";
-  const [h, m] = atTime.split(":").map((v) => Number(v) || 0);
-  const dueToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m));
-  if (now.getTime() < dueToday.getTime()) return false;
-  if (!lastRun) return true;
-  return lastRun.getTime() < dueToday.getTime();
+  return isScheduleDue(trigger.config, trigger.last_run_at, now);
 }
 
 async function executeStep(

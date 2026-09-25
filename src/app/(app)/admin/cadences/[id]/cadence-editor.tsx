@@ -27,6 +27,7 @@ import {
   type StepInput,
   type TriggerInput,
 } from "../actions";
+import { VALUELESS_OPERATORS, WHEN_OPERATOR_LABELS } from "@/lib/types";
 import type {
   Cadence,
   CadenceStep,
@@ -35,6 +36,7 @@ import type {
   CadenceStepType,
   CadenceTriggerType,
   EmailTemplate,
+  WorkflowWhenOperator,
 } from "@/lib/types";
 
 type DelayUnit = "minutes" | "hours" | "days";
@@ -56,6 +58,7 @@ interface TriggerRow {
   trigger_type: CadenceTriggerType;
   active: boolean;
   when_field: string;
+  when_operator: WorkflowWhenOperator;
   when_value: string;
   schedule_type: "daily" | "interval";
   at_time: string;
@@ -91,11 +94,16 @@ function stepToRow(s: CadenceStep): StepRow {
 
 function triggerToRow(t: CadenceTrigger): TriggerRow {
   const c = t.config || {};
+  const op = c.when_operator;
   return {
     key: t.id,
     trigger_type: t.trigger_type,
     active: t.active,
     when_field: (c.when_field as string) || "",
+    // Triggers saved before operators existed have no when_operator, and they
+    // all meant "equals".
+    when_operator:
+      op === "not_equals" || op === "is_blank" || op === "is_not_blank" ? op : "equals",
     when_value: (c.when_value as string) || "",
     schedule_type: c.schedule_type === "interval" ? "interval" : "daily",
     at_time: (c.at_time as string) || "09:00",
@@ -119,6 +127,78 @@ let keyCounter = 0;
 function newKey() {
   keyCounter += 1;
   return `new-${keyCounter}`;
+}
+
+/**
+ * The when_* half of a trigger's config. Shared by the save and by "Enroll
+ * matching leads now" so the button always enrolls exactly the leads the
+ * stored trigger would pick. when_value is dropped for the blank operators,
+ * which ignore it.
+ */
+function conditionConfig(t: TriggerRow): Record<string, unknown> {
+  const valueless = VALUELESS_OPERATORS.includes(t.when_operator);
+  return {
+    when_field: t.when_field || undefined,
+    when_operator: t.when_operator,
+    when_value: valueless ? undefined : t.when_value || undefined,
+  };
+}
+
+/**
+ * The field / operator / value row shared by both trigger layouts. The value
+ * input disappears for the blank operators, which take no value - showing a
+ * disabled box that silently does nothing is how admins end up believing the
+ * trigger still compares against it.
+ */
+function ConditionFields({
+  trigger,
+  fieldLabel,
+  onChange,
+}: {
+  trigger: TriggerRow;
+  fieldLabel: string;
+  onChange: (patch: Partial<TriggerRow>) => void;
+}) {
+  const needsValue = !VALUELESS_OPERATORS.includes(trigger.when_operator);
+  return (
+    <div className="flex gap-2">
+      <div className="flex-1 space-y-1">
+        <Label className="text-xs">{fieldLabel}</Label>
+        <Input
+          placeholder="e.g. user_type"
+          value={trigger.when_field}
+          onChange={(e) => onChange({ when_field: e.target.value })}
+        />
+      </div>
+      <div className="flex-1 space-y-1">
+        <Label className="text-xs">Comparison</Label>
+        <Select
+          value={trigger.when_operator}
+          onValueChange={(v) => v && onChange({ when_operator: v as WorkflowWhenOperator })}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="equals">{WHEN_OPERATOR_LABELS.equals}</SelectItem>
+            <SelectItem value="not_equals">{WHEN_OPERATOR_LABELS.not_equals}</SelectItem>
+            <SelectItem value="is_blank">{WHEN_OPERATOR_LABELS.is_blank}</SelectItem>
+            <SelectItem value="is_not_blank">{WHEN_OPERATOR_LABELS.is_not_blank}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {needsValue && (
+        <div className="flex-1 space-y-1">
+          <Label className="text-xs">Value</Label>
+          <Input
+            placeholder="e.g. Hot"
+            value={trigger.when_value}
+            onChange={(e) => onChange({ when_value: e.target.value })}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function CadenceEditor({
@@ -185,6 +265,7 @@ export function CadenceEditor({
         trigger_type: "record_updated",
         active: true,
         when_field: "",
+        when_operator: "equals",
         when_value: "",
         schedule_type: "daily",
         at_time: "09:00",
@@ -259,10 +340,9 @@ export function CadenceEditor({
               schedule_type: t.schedule_type,
               at_time: t.at_time,
               interval_minutes: t.interval_minutes,
-              when_field: t.when_field || undefined,
-              when_value: t.when_value || undefined,
+              ...conditionConfig(t),
             }
-          : { when_field: t.when_field || undefined, when_value: t.when_value || undefined },
+          : conditionConfig(t),
     }));
 
     const results = await Promise.all([
@@ -296,10 +376,7 @@ export function CadenceEditor({
     const t = triggers[index];
     startTransition(async () => {
       if (!(await persist())) return;
-      const result = await enrollMatchingLeadsNow(cadence.id, {
-        when_field: t.when_field || undefined,
-        when_value: t.when_value || undefined,
-      });
+      const result = await enrollMatchingLeadsNow(cadence.id, conditionConfig(t));
       if (!result.success) {
         toast.error(result.error || "Failed to enroll");
         return;
@@ -393,24 +470,11 @@ export function CadenceEditor({
               </div>
 
               {t.trigger_type !== "scheduled" && (
-                <div className="flex gap-2">
-                  <div className="flex-1 space-y-1">
-                    <Label className="text-xs">Field (optional)</Label>
-                    <Input
-                      placeholder="e.g. user_type"
-                      value={t.when_field}
-                      onChange={(e) => updateTrigger(i, { when_field: e.target.value })}
-                    />
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <Label className="text-xs">Equals</Label>
-                    <Input
-                      placeholder="e.g. Hot"
-                      value={t.when_value}
-                      onChange={(e) => updateTrigger(i, { when_value: e.target.value })}
-                    />
-                  </div>
-                </div>
+                <ConditionFields
+                  trigger={t}
+                  fieldLabel="Field (optional)"
+                  onChange={(patch) => updateTrigger(i, patch)}
+                />
               )}
 
               {t.trigger_type === "scheduled" && (
@@ -443,24 +507,11 @@ export function CadenceEditor({
                       onChange={(e) => updateTrigger(i, { interval_minutes: Number(e.target.value) })}
                     />
                   )}
-                  <div className="flex gap-2">
-                    <div className="flex-1 space-y-1">
-                      <Label className="text-xs">Only leads where field (optional)</Label>
-                      <Input
-                        placeholder="e.g. user_type"
-                        value={t.when_field}
-                        onChange={(e) => updateTrigger(i, { when_field: e.target.value })}
-                      />
-                    </div>
-                    <div className="flex-1 space-y-1">
-                      <Label className="text-xs">Equals</Label>
-                      <Input
-                        placeholder="e.g. Hot"
-                        value={t.when_value}
-                        onChange={(e) => updateTrigger(i, { when_value: e.target.value })}
-                      />
-                    </div>
-                  </div>
+                  <ConditionFields
+                    trigger={t}
+                    fieldLabel="Only leads where field (optional)"
+                    onChange={(patch) => updateTrigger(i, patch)}
+                  />
                 </div>
               )}
 
