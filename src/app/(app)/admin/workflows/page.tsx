@@ -1,6 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { WorkflowForm } from "./workflow-form";
-import { WorkflowList } from "./workflow-list";
+import { WorkflowsPanel } from "./workflows-panel";
 import type { Workflow } from "@/lib/types";
 
 export default async function WorkflowsAdminPage() {
@@ -13,12 +12,7 @@ export default async function WorkflowsAdminPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Workflows</h1>
-      <div className="grid gap-6 lg:grid-cols-2">
-        <WorkflowForm />
-        <div className="rounded-md border bg-background">
-          <WorkflowList workflows={(workflows as Workflow[]) || []} />
-        </div>
-      </div>
+      <WorkflowsPanel workflows={(workflows as Workflow[]) || []} />
     </div>
   );
 }

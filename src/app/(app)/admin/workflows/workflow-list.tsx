@@ -33,7 +33,15 @@ function describeCondition(config: Record<string, unknown> | null | undefined): 
   return `${field} ${label} "${String(c.when_value ?? "")}"`;
 }
 
-export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
+export function WorkflowList({
+  workflows,
+  editingId,
+  onEdit,
+}: {
+  workflows: Workflow[];
+  editingId?: string | null;
+  onEdit: (workflow: Workflow) => void;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -125,7 +133,7 @@ export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
             </TableRow>
           )}
           {workflows.map((w) => (
-            <TableRow key={w.id}>
+            <TableRow key={w.id} data-state={w.id === editingId ? "selected" : undefined}>
               <TableCell>{w.name}</TableCell>
               <TableCell>
                 {OBJECTS[w.object_name as keyof typeof OBJECTS]?.labelPlural || w.object_name}
@@ -157,6 +165,14 @@ export function WorkflowList({ workflows }: { workflows: Workflow[] }) {
               </TableCell>
               <TableCell>
                 <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isPending}
+                    onClick={() => onEdit(w)}
+                  >
+                    Edit
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"

@@ -15,15 +15,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { OBJECTS, OBJECT_KEYS } from "@/lib/objects";
+import { OBJECTS, OBJECT_KEYS, isObjectKey } from "@/lib/objects";
 import { createClient } from "@/lib/supabase/client";
 import {
   SCHEDULABLE_TRIGGER_TYPES,
   VALUELESS_OPERATORS,
   WHEN_OPERATOR_LABELS,
 } from "@/lib/types";
-import type { CustomField, EmailAlert } from "@/lib/types";
-import { createWorkflow } from "./actions";
+import type { CustomField, EmailAlert, Workflow } from "@/lib/types";
+import { createWorkflow, updateWorkflow } from "./actions";
 import type {
   WorkflowRunMode,
   WorkflowTriggerType,
@@ -80,19 +80,44 @@ const EXAMPLES: Record<WorkflowTriggerType, string> = {
 }`,
 };
 
-export function WorkflowForm() {
+/**
+ * Creates a workflow, or edits one when `workflow` is passed. The parent keys
+ * this component by the workflow's id, so switching which workflow is being
+ * edited remounts it and the state below re-seeds from the new row.
+ */
+export function WorkflowForm({
+  workflow,
+  onDone,
+}: {
+  workflow?: Workflow | null;
+  onDone?: () => void;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [name, setName] = useState("");
-  const [objectName, setObjectName] = useState(OBJECT_KEYS[0]);
-  const [triggerType, setTriggerType] = useState<WorkflowTriggerType>("field_update");
-  const [config, setConfig] = useState(EXAMPLES.field_update);
+  const editing = !!workflow;
+  const schedule = workflow?.schedule_config || {};
+  const [name, setName] = useState(workflow?.name ?? "");
+  const [objectName, setObjectName] = useState(
+    workflow && isObjectKey(workflow.object_name) ? workflow.object_name : OBJECT_KEYS[0]
+  );
+  const [triggerType, setTriggerType] = useState<WorkflowTriggerType>(
+    workflow?.trigger_type ?? "field_update"
+  );
+  const [config, setConfig] = useState(
+    workflow ? JSON.stringify(workflow.config ?? {}, null, 2) : EXAMPLES.field_update
+  );
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [emailAlerts, setEmailAlerts] = useState<EmailAlert[]>([]);
-  const [runMode, setRunMode] = useState<WorkflowRunMode>("on_save");
-  const [scheduleType, setScheduleType] = useState<"daily" | "interval">("daily");
-  const [atTime, setAtTime] = useState("09:00");
-  const [intervalMinutes, setIntervalMinutes] = useState(60);
+  const [runMode, setRunMode] = useState<WorkflowRunMode>(workflow?.run_mode ?? "on_save");
+  const [scheduleType, setScheduleType] = useState<"daily" | "interval">(
+    schedule.schedule_type === "interval" ? "interval" : "daily"
+  );
+  const [atTime, setAtTime] = useState(
+    typeof schedule.at_time === "string" ? schedule.at_time : "09:00"
+  );
+  const [intervalMinutes, setIntervalMinutes] = useState(
+    Number(schedule.interval_minutes) || 60
+  );
 
   useEffect(() => {
     let ignore = false;
@@ -257,7 +282,7 @@ export function WorkflowForm() {
     }
 
     startTransition(async () => {
-      const result = await createWorkflow({
+      const input = {
         name,
         object_name: objectName,
         trigger_type: triggerType,
@@ -267,7 +292,18 @@ export function WorkflowForm() {
           scheduleType === "interval"
             ? { schedule_type: "interval", interval_minutes: intervalMinutes }
             : { schedule_type: "daily", at_time: atTime },
-      });
+      };
+      if (workflow) {
+        const result = await updateWorkflow(workflow.id, input);
+        if (!result.success) toast.error(result.error || "Failed to save workflow");
+        else {
+          toast.success("Workflow saved");
+          router.refresh();
+          onDone?.();
+        }
+        return;
+      }
+      const result = await createWorkflow(input);
       if (!result.success) toast.error(result.error || "Failed to create workflow");
       else {
         toast.success("Workflow created");
@@ -280,7 +316,9 @@ export function WorkflowForm() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">New workflow</CardTitle>
+        <CardTitle className="text-base">
+          {editing ? `Edit workflow: ${workflow.name}` : "New workflow"}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={submit} className="space-y-3">
@@ -470,9 +508,22 @@ export function WorkflowForm() {
               <code className="break-words">{knownFields.join(", ")}</code>
             </p>
           </div>
-          <Button type="submit" disabled={isPending}>
-            {isPending ? "Creating..." : "Create workflow"}
-          </Button>
+          <div className="flex gap-2">
+            <Button type="submit" disabled={isPending}>
+              {editing
+                ? isPending
+                  ? "Saving..."
+                  : "Save changes"
+                : isPending
+                  ? "Creating..."
+                  : "Create workflow"}
+            </Button>
+            {editing && (
+              <Button type="button" variant="outline" disabled={isPending} onClick={onDone}>
+                Cancel
+              </Button>
+            )}
+          </div>
         </form>
       </CardContent>
     </Card>

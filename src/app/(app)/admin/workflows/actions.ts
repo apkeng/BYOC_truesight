@@ -31,6 +31,42 @@ export async function createWorkflow(input: {
   return { success: !error, error: error?.message };
 }
 
+/**
+ * Saves edits to an existing workflow. active and last_run_at are left alone:
+ * the list's switch owns active, and rewriting last_run_at would make a
+ * scheduled workflow fire again (or skip a run) just because it was edited.
+ */
+export async function updateWorkflow(
+  id: string,
+  input: {
+    name: string;
+    object_name: string;
+    trigger_type: WorkflowTriggerType;
+    config: Record<string, unknown>;
+    run_mode: WorkflowRunMode;
+    schedule_config: Record<string, unknown>;
+  }
+) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("workflows")
+    .update({
+      name: input.name,
+      object_name: input.object_name,
+      trigger_type: input.trigger_type,
+      config: input.config,
+      run_mode: input.run_mode,
+      schedule_config: input.run_mode === "scheduled" ? input.schedule_config : {},
+    })
+    .eq("id", id)
+    .select("id");
+  revalidatePath("/admin/workflows");
+  if (error) return { success: false, error: error.message };
+  // RLS turns a forbidden update into zero rows rather than an error
+  if (!data || data.length === 0) return { success: false, error: "Workflow not found" };
+  return { success: true };
+}
+
 export async function toggleWorkflowActive(id: string, active: boolean) {
   const supabase = await createClient();
   const { error } = await supabase.from("workflows").update({ active }).eq("id", id);
