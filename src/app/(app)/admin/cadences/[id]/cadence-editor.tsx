@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { OBJECTS } from "@/lib/objects";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Select,
@@ -27,16 +28,31 @@ import {
   type StepInput,
   type TriggerInput,
 } from "../actions";
-import { VALUELESS_OPERATORS, WHEN_OPERATOR_LABELS } from "@/lib/types";
+import {
+  DATE_OPERATORS,
+  NUMBER_OPERATORS,
+  VALUELESS_OPERATORS,
+  WHEN_OPERATOR_LABELS,
+  readWhenOperator,
+} from "@/lib/types";
+import {
+  conditionError,
+  operatorHelp,
+  operatorsFor,
+  whenFieldKinds,
+  type WhenFieldKind,
+} from "@/lib/when-conditions";
 import type {
   Cadence,
   CadenceStep,
+  CustomField,
   CadenceStepRun,
   CadenceTrigger,
   CadenceStepType,
   CadenceTriggerType,
   EmailTemplate,
   WorkflowWhenOperator,
+  WorkflowWhenUnit,
 } from "@/lib/types";
 
 type DelayUnit = "minutes" | "hours" | "days";
@@ -60,6 +76,10 @@ interface TriggerRow {
   when_field: string;
   when_operator: WorkflowWhenOperator;
   when_value: string;
+  /** End of the range, for "between". */
+  when_value_to: string;
+  /** Days or months, for the within_* date operators. */
+  when_unit: WorkflowWhenUnit;
   schedule_type: "daily" | "interval";
   at_time: string;
   interval_minutes: number;
@@ -94,7 +114,7 @@ function stepToRow(s: CadenceStep): StepRow {
 
 function triggerToRow(t: CadenceTrigger): TriggerRow {
   const c = t.config || {};
-  const op = c.when_operator;
+  const text = (v: unknown) => (v === undefined || v === null ? "" : String(v));
   return {
     key: t.id,
     trigger_type: t.trigger_type,
@@ -102,9 +122,10 @@ function triggerToRow(t: CadenceTrigger): TriggerRow {
     when_field: (c.when_field as string) || "",
     // Triggers saved before operators existed have no when_operator, and they
     // all meant "equals".
-    when_operator:
-      op === "not_equals" || op === "is_blank" || op === "is_not_blank" ? op : "equals",
-    when_value: (c.when_value as string) || "",
+    when_operator: readWhenOperator(c.when_operator),
+    when_value: text(c.when_value),
+    when_value_to: text(c.when_value_to),
+    when_unit: c.when_unit === "months" ? "months" : "days",
     schedule_type: c.schedule_type === "interval" ? "interval" : "daily",
     at_time: (c.at_time as string) || "09:00",
     interval_minutes: Number(c.interval_minutes) || 60,
@@ -132,8 +153,9 @@ function newKey() {
 /**
  * The when_* half of a trigger's config. Shared by the save and by "Enroll
  * matching leads now" so the button always enrolls exactly the leads the
- * stored trigger would pick. when_value is dropped for the blank operators,
- * which ignore it.
+ * stored trigger would pick. Each operator stores only the keys it reads:
+ * no when_value for the blank operators, when_value_to only for "between",
+ * when_unit only for the within_* date operators.
  */
 function conditionConfig(t: TriggerRow): Record<string, unknown> {
   const valueless = VALUELESS_OPERATORS.includes(t.when_operator);
@@ -141,6 +163,8 @@ function conditionConfig(t: TriggerRow): Record<string, unknown> {
     when_field: t.when_field || undefined,
     when_operator: t.when_operator,
     when_value: valueless ? undefined : t.when_value || undefined,
+    when_value_to: t.when_operator === "between" ? t.when_value_to || undefined : undefined,
+    when_unit: DATE_OPERATORS.includes(t.when_operator) ? t.when_unit : undefined,
   };
 }
 
@@ -148,54 +172,129 @@ function conditionConfig(t: TriggerRow): Record<string, unknown> {
  * The field / operator / value row shared by both trigger layouts. The value
  * input disappears for the blank operators, which take no value - showing a
  * disabled box that silently does nothing is how admins end up believing the
- * trigger still compares against it.
+ * trigger still compares against it. Number and date fields additionally get
+ * the range / within comparisons, with inputs shaped to match.
  */
 function ConditionFields({
   trigger,
   fieldLabel,
+  kinds,
   onChange,
 }: {
   trigger: TriggerRow;
   fieldLabel: string;
+  kinds: Record<string, WhenFieldKind>;
   onChange: (patch: Partial<TriggerRow>) => void;
 }) {
-  const needsValue = !VALUELESS_OPERATORS.includes(trigger.when_operator);
+  const op = trigger.when_operator;
+  const kind = kinds[trigger.when_field];
+  const isNumberOp = NUMBER_OPERATORS.includes(op);
+  const isDateOp = DATE_OPERATORS.includes(op);
+
+  function onOperatorChange(next: WorkflowWhenOperator) {
+    const patch: Partial<TriggerRow> = { when_operator: next };
+    // A text value left over from "equals" means nothing as a number or a day
+    // count, so those operators start from an empty box instead.
+    if (
+      (NUMBER_OPERATORS.includes(next) || DATE_OPERATORS.includes(next)) &&
+      !Number.isFinite(Number(trigger.when_value.trim() || "x"))
+    ) {
+      patch.when_value = "";
+    }
+    onChange(patch);
+  }
+
   return (
-    <div className="flex gap-2">
-      <div className="flex-1 space-y-1">
-        <Label className="text-xs">{fieldLabel}</Label>
-        <Input
-          placeholder="e.g. user_type"
-          value={trigger.when_field}
-          onChange={(e) => onChange({ when_field: e.target.value })}
-        />
-      </div>
-      <div className="flex-1 space-y-1">
-        <Label className="text-xs">Comparison</Label>
-        <Select
-          value={trigger.when_operator}
-          onValueChange={(v) => v && onChange({ when_operator: v as WorkflowWhenOperator })}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="equals">{WHEN_OPERATOR_LABELS.equals}</SelectItem>
-            <SelectItem value="not_equals">{WHEN_OPERATOR_LABELS.not_equals}</SelectItem>
-            <SelectItem value="is_blank">{WHEN_OPERATOR_LABELS.is_blank}</SelectItem>
-            <SelectItem value="is_not_blank">{WHEN_OPERATOR_LABELS.is_not_blank}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      {needsValue && (
+    <div className="space-y-1">
+      <div className="flex gap-2">
         <div className="flex-1 space-y-1">
-          <Label className="text-xs">Value</Label>
+          <Label className="text-xs">{fieldLabel}</Label>
           <Input
-            placeholder="e.g. Hot"
-            value={trigger.when_value}
-            onChange={(e) => onChange({ when_value: e.target.value })}
+            placeholder="e.g. user_type"
+            list="cadence-lead-fields"
+            value={trigger.when_field}
+            onChange={(e) => onChange({ when_field: e.target.value })}
           />
         </div>
+        <div className="flex-1 space-y-1">
+          <Label className="text-xs">Comparison</Label>
+          <Select value={op} onValueChange={(v) => v && onOperatorChange(v as WorkflowWhenOperator)}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {operatorsFor(kind, op).map((o) => (
+                <SelectItem key={o} value={o}>
+                  {WHEN_OPERATOR_LABELS[o]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {isDateOp ? (
+          <div className="flex flex-1 gap-2">
+            <div className="flex-1 space-y-1">
+              <Label className="text-xs">How many</Label>
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                placeholder="N"
+                value={trigger.when_value}
+                onChange={(e) => onChange({ when_value: e.target.value })}
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label className="text-xs">Unit</Label>
+              <Select
+                value={trigger.when_unit}
+                onValueChange={(v) => v && onChange({ when_unit: v as WorkflowWhenUnit })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="days">days</SelectItem>
+                  <SelectItem value="months">months</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        ) : op === "between" ? (
+          <div className="flex flex-1 gap-2">
+            <div className="flex-1 space-y-1">
+              <Label className="text-xs">From</Label>
+              <Input
+                type="number"
+                value={trigger.when_value}
+                onChange={(e) => onChange({ when_value: e.target.value })}
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label className="text-xs">To</Label>
+              <Input
+                type="number"
+                value={trigger.when_value_to}
+                onChange={(e) => onChange({ when_value_to: e.target.value })}
+              />
+            </div>
+          </div>
+        ) : (
+          !VALUELESS_OPERATORS.includes(op) && (
+            <div className="flex-1 space-y-1">
+              <Label className="text-xs">Value</Label>
+              <Input
+                type={isNumberOp ? "number" : undefined}
+                placeholder={isNumberOp ? "k" : "e.g. Hot"}
+                value={trigger.when_value}
+                onChange={(e) => onChange({ when_value: e.target.value })}
+              />
+            </div>
+          )
+        )}
+      </div>
+      {trigger.when_field && (
+        <p className="text-xs text-muted-foreground">{operatorHelp(op, kind)}</p>
       )}
     </div>
   );
@@ -207,12 +306,14 @@ export function CadenceEditor({
   initialTriggers,
   templates,
   recentRuns,
+  leadCustomFields,
 }: {
   cadence: Cadence;
   initialSteps: CadenceStep[];
   initialTriggers: CadenceTrigger[];
   templates: EmailTemplate[];
   recentRuns: CadenceStepRun[];
+  leadCustomFields: CustomField[];
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -221,6 +322,12 @@ export function CadenceEditor({
   const [active, setActive] = useState(cadence.active);
   const [steps, setSteps] = useState<StepRow[]>(initialSteps.map(stepToRow));
   const [triggers, setTriggers] = useState<TriggerRow[]>(initialTriggers.map(triggerToRow));
+  // Cadences enroll leads, so trigger conditions are always on lead fields.
+  const leadFieldKinds = useMemo(() => whenFieldKinds("leads", leadCustomFields), [leadCustomFields]);
+  const leadFieldNames = useMemo(
+    () => [...OBJECTS.leads.fields.map((f) => f.name), ...leadCustomFields.map((f) => f.field_name)],
+    [leadCustomFields]
+  );
 
   function addStep() {
     setSteps((prev) => [
@@ -267,6 +374,8 @@ export function CadenceEditor({
         when_field: "",
         when_operator: "equals",
         when_value: "",
+        when_value_to: "",
+        when_unit: "days",
         schedule_type: "daily",
         at_time: "09:00",
         interval_minutes: 60,
@@ -312,6 +421,11 @@ export function CadenceEditor({
     for (const t of triggers) {
       if (t.trigger_type === "scheduled" && t.schedule_type === "interval" && t.interval_minutes < 1) {
         toast.error("Interval must be at least 1 minute");
+        return false;
+      }
+      const conditionProblem = conditionError(conditionConfig(t), leadFieldKinds);
+      if (conditionProblem) {
+        toast.error(conditionProblem);
         return false;
       }
     }
@@ -442,6 +556,11 @@ export function CadenceEditor({
             scheduled triggers; it never enrolls for an on-created/on-updated trigger. You can also enroll by
             hand via Lead Lists → Send to cadence.
           </p>
+          <datalist id="cadence-lead-fields">
+            {leadFieldNames.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
           {triggers.map((t, i) => (
             <div key={t.key} className="space-y-2 rounded-md border p-3">
               <div className="flex items-center justify-between gap-2">
@@ -473,6 +592,7 @@ export function CadenceEditor({
                 <ConditionFields
                   trigger={t}
                   fieldLabel="Field (optional)"
+                  kinds={leadFieldKinds}
                   onChange={(patch) => updateTrigger(i, patch)}
                 />
               )}
@@ -510,6 +630,7 @@ export function CadenceEditor({
                   <ConditionFields
                     trigger={t}
                     fieldLabel="Only leads where field (optional)"
+                    kinds={leadFieldKinds}
                     onChange={(patch) => updateTrigger(i, patch)}
                   />
                 </div>

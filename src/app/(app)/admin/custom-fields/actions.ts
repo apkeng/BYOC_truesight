@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import type { CustomFieldType } from "@/lib/types";
 
 /**
  * Creates a custom field. The field's values live in a real column on the
@@ -15,7 +16,7 @@ export async function createCustomField(input: {
   object_name: string;
   field_name: string;
   field_label: string;
-  field_type: "number" | "text" | "picklist" | "lookup";
+  field_type: CustomFieldType;
   picklist_values?: string[];
   lookup_object?: string;
 }) {

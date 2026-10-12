@@ -18,7 +18,7 @@ export interface PicklistValue {
   sort_order: number;
 }
 
-export type CustomFieldType = "number" | "text" | "picklist" | "lookup";
+export type CustomFieldType = "number" | "text" | "date" | "picklist" | "lookup";
 
 /**
  * An admin-defined field. The definition lives here; the *values* live in a
@@ -61,20 +61,83 @@ export type WorkflowWhenMode = "always" | "on_change";
 
 /**
  * How when_field is compared. Shared by workflow conditions and cadence
- * triggers, which both run through matches(). The blank operators ignore
- * when_value. Absent means "equals", so pre-existing configs are unchanged.
+ * triggers, which both run through matches(). Absent means "equals", so
+ * pre-existing configs are unchanged.
+ *
+ *   equals / not_equals           - against when_value, as text
+ *   is_blank / is_not_blank       - when_value is ignored
+ *   greater_than ... less_or_equal - number fields, against when_value (k)
+ *   between                       - number fields, when_value..when_value_to,
+ *                                   both ends inclusive
+ *   within_last / within_next     - date fields: the date falls between today
+ *                                   and when_value (N) when_unit ("days" |
+ *                                   "months") ago / from now, inclusive
  */
-export type WorkflowWhenOperator = "equals" | "not_equals" | "is_blank" | "is_not_blank";
+export type WorkflowWhenOperator =
+  | "equals"
+  | "not_equals"
+  | "is_blank"
+  | "is_not_blank"
+  | "greater_than"
+  | "greater_or_equal"
+  | "less_than"
+  | "less_or_equal"
+  | "between"
+  | "within_last"
+  | "within_next";
+
+export const WHEN_OPERATORS: WorkflowWhenOperator[] = [
+  "equals",
+  "not_equals",
+  "is_blank",
+  "is_not_blank",
+  "greater_than",
+  "greater_or_equal",
+  "less_than",
+  "less_or_equal",
+  "between",
+  "within_last",
+  "within_next",
+];
 
 /** Operators that need no when_value, so the UI hides the value input. */
 export const VALUELESS_OPERATORS: WorkflowWhenOperator[] = ["is_blank", "is_not_blank"];
+
+/** Operators that only make sense on a number field. */
+export const NUMBER_OPERATORS: WorkflowWhenOperator[] = [
+  "greater_than",
+  "greater_or_equal",
+  "less_than",
+  "less_or_equal",
+  "between",
+];
+
+/** Operators that only make sense on a date or date/time field. */
+export const DATE_OPERATORS: WorkflowWhenOperator[] = ["within_last", "within_next"];
+
+/** The unit a within_last / within_next window is counted in. */
+export type WorkflowWhenUnit = "days" | "months";
 
 export const WHEN_OPERATOR_LABELS: Record<WorkflowWhenOperator, string> = {
   equals: "equals",
   not_equals: "does not equal",
   is_blank: "is blank",
   is_not_blank: "is not blank",
+  greater_than: "is greater than",
+  greater_or_equal: "is greater than or equal to",
+  less_than: "is less than",
+  less_or_equal: "is less than or equal to",
+  between: "is within the range",
+  within_last: "is within the last",
+  within_next: "is within the next",
 };
+
+/** Falls back to "equals" for any config written before operators existed. */
+export function readWhenOperator(raw: unknown): WorkflowWhenOperator {
+  return WHEN_OPERATORS.includes(raw as WorkflowWhenOperator)
+    ? (raw as WorkflowWhenOperator)
+    : "equals";
+}
 
 /**
  * When a workflow runs.

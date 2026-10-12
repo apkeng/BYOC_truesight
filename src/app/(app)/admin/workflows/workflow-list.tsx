@@ -15,8 +15,8 @@ import {
 } from "./actions";
 import { OBJECTS } from "@/lib/objects";
 import { describeSchedule } from "@/lib/schedule";
-import { WHEN_OPERATOR_LABELS } from "@/lib/types";
-import type { Workflow, WorkflowWhenOperator } from "@/lib/types";
+import { NUMBER_OPERATORS, WHEN_OPERATOR_LABELS, readWhenOperator } from "@/lib/types";
+import type { Workflow } from "@/lib/types";
 
 /** Plain-English version of a workflow's when_* condition, for the table. */
 function describeCondition(config: Record<string, unknown> | null | undefined): string {
@@ -24,12 +24,17 @@ function describeCondition(config: Record<string, unknown> | null | undefined): 
   const field = c.when_field as string | undefined;
   if (!field) return "every record";
 
-  const raw = c.when_operator;
-  const operator: WorkflowWhenOperator =
-    raw === "not_equals" || raw === "is_blank" || raw === "is_not_blank" ? raw : "equals";
+  const operator = readWhenOperator(c.when_operator);
   const label = WHEN_OPERATOR_LABELS[operator];
 
   if (operator === "is_blank" || operator === "is_not_blank") return `${field} ${label}`;
+  if (operator === "between") {
+    return `${field} ${label} ${String(c.when_value ?? "")} to ${String(c.when_value_to ?? "")}`;
+  }
+  if (operator === "within_last" || operator === "within_next") {
+    return `${field} ${label} ${String(c.when_value ?? "")} ${c.when_unit === "months" ? "months" : "days"}`;
+  }
+  if (NUMBER_OPERATORS.includes(operator)) return `${field} ${label} ${String(c.when_value ?? "")}`;
   return `${field} ${label} "${String(c.when_value ?? "")}"`;
 }
 

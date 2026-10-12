@@ -75,6 +75,7 @@ export function CustomFieldForm({ objectName }: { objectName: string }) {
               <SelectContent>
                 <SelectItem value="text">Text</SelectItem>
                 <SelectItem value="number">Number</SelectItem>
+                <SelectItem value="date">Date</SelectItem>
                 <SelectItem value="picklist">Picklist</SelectItem>
                 <SelectItem value="lookup">Lookup</SelectItem>
               </SelectContent>

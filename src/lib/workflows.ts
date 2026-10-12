@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Workflow, WorkflowWhenOperator } from "./types";
+import { readWhenOperator } from "./types";
 import { substitute, substituteDeep } from "./template";
 import { sendEmailAlert } from "./email-alerts";
 
@@ -18,10 +19,94 @@ function isBlank(value: unknown): boolean {
   return String(value).trim() === "";
 }
 
-/** Falls back to "equals" for any config written before operators existed. */
-function readOperator(config: Record<string, unknown>): WorkflowWhenOperator {
-  const raw = config.when_operator;
-  return raw === "not_equals" || raw === "is_blank" || raw === "is_not_blank" ? raw : "equals";
+/**
+ * A field value as a number, or null when it is blank or not a number at all.
+ * Blank is NOT zero: an unfilled amount must not satisfy "less than 100".
+ */
+function toNumber(value: unknown): number | null {
+  if (isBlank(value) || Array.isArray(value)) return null;
+  const n = typeof value === "number" ? value : Number(String(value).trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function compareNumber(
+  operator: WorkflowWhenOperator,
+  value: unknown,
+  config: Record<string, unknown>
+): boolean {
+  const n = toNumber(value);
+  const k = toNumber(config.when_value);
+  if (n === null || k === null) return false;
+  switch (operator) {
+    case "greater_than":
+      return n > k;
+    case "greater_or_equal":
+      return n >= k;
+    case "less_than":
+      return n < k;
+    case "less_or_equal":
+      return n <= k;
+    case "between": {
+      const to = toNumber(config.when_value_to);
+      if (to === null) return false;
+      // Inclusive at both ends, and forgiving of the ends being typed backwards.
+      return n >= Math.min(k, to) && n <= Math.max(k, to);
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * A field value as a UTC calendar day "YYYY-MM-DD", or null when it is blank
+ * or not a date. Date fields arrive as "2026-10-12"; date/time fields as full
+ * ISO timestamps, which are reduced to their UTC day.
+ */
+function toUtcDay(value: unknown): string | null {
+  if (isBlank(value) || Array.isArray(value)) return null;
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+/**
+ * Moves a UTC day by whole days or calendar months. Months clamp to the end of
+ * the target month, so one month after 31 January is 28/29 February rather
+ * than rolling over into March.
+ */
+function shiftUtcDay(day: string, amount: number, unit: "days" | "months"): string {
+  const [y, m, d] = day.split("-").map(Number);
+  if (unit === "days") {
+    return new Date(Date.UTC(y, m - 1, d + amount)).toISOString().slice(0, 10);
+  }
+  const targetMonth = m - 1 + amount;
+  const lastDay = new Date(Date.UTC(y, targetMonth + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, targetMonth, Math.min(d, lastDay))).toISOString().slice(0, 10);
+}
+
+/**
+ * within_last / within_next. Counted in whole UTC calendar days, today
+ * included at both ends: "within the next 7 days" is today through today+7,
+ * "within the last 1 month" is the same day last month through today. UTC for
+ * the same reason daily schedules are UTC (see schedule.ts) - the cron that
+ * sweeps scheduled workflows has no user and therefore no timezone.
+ */
+function isWithin(
+  operator: WorkflowWhenOperator,
+  value: unknown,
+  config: Record<string, unknown>,
+  now: Date
+): boolean {
+  const day = toUtcDay(value);
+  const amount = toNumber(config.when_value);
+  if (day === null || amount === null || amount < 0) return false;
+  const unit = config.when_unit === "months" ? "months" : "days";
+  const today = now.toISOString().slice(0, 10);
+  const whole = Math.floor(amount);
+  // "YYYY-MM-DD" strings sort in date order, so plain string comparison works.
+  if (operator === "within_last") return day >= shiftUtcDay(today, -whole, unit) && day <= today;
+  return day >= today && day <= shiftUtcDay(today, whole, unit);
 }
 
 /**
@@ -31,15 +116,29 @@ function readOperator(config: Record<string, unknown>): WorkflowWhenOperator {
  */
 function conditionHolds(
   config: Record<string, unknown>,
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  now: Date
 ): boolean {
   const whenField = config.when_field as string | undefined;
   if (!whenField) return true;
 
   const value = record[whenField];
-  const operator = readOperator(config);
-  if (operator === "is_blank") return isBlank(value);
-  if (operator === "is_not_blank") return !isBlank(value);
+  const operator = readWhenOperator(config.when_operator);
+  switch (operator) {
+    case "is_blank":
+      return isBlank(value);
+    case "is_not_blank":
+      return !isBlank(value);
+    case "greater_than":
+    case "greater_or_equal":
+    case "less_than":
+    case "less_or_equal":
+    case "between":
+      return compareNumber(operator, value, config);
+    case "within_last":
+    case "within_next":
+      return isWithin(operator, value, config, now);
+  }
 
   const equal = String(value ?? "") === String(config.when_value ?? "");
   return operator === "not_equals" ? !equal : equal;
@@ -51,6 +150,7 @@ function conditionHolds(
  * `config.when_operator` picks the comparison against when_field:
  *   "equals" (default) / "not_equals" - compared against when_value
  *   "is_blank" / "is_not_blank"       - when_value is ignored
+ *   number and date operators         - see WorkflowWhenOperator in types.ts
  * Omitting it means "equals", so every workflow and cadence trigger written
  * before operators existed keeps behaving exactly as it did.
  *
@@ -73,15 +173,16 @@ function conditionHolds(
 export function matches(
   config: Record<string, unknown>,
   record: Record<string, unknown>,
-  previous?: Record<string, unknown> | null
+  previous?: Record<string, unknown> | null,
+  now: Date = new Date()
 ) {
-  if (!conditionHolds(config, record)) return false;
+  if (!conditionHolds(config, record, now)) return false;
 
   if (config.when_mode !== "on_change") return true;
   if (!config.when_field) return true;
   if (previous === undefined) return true;
   if (previous === null) return true;
-  return !conditionHolds(config, previous);
+  return !conditionHolds(config, previous, now);
 }
 
 /**

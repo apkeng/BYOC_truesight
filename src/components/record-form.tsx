@@ -346,6 +346,15 @@ function CustomFieldInput({
       />
     );
   }
+  if (field.field_type === "date") {
+    return (
+      <Input
+        type="date"
+        value={(value as string) || ""}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
   if (field.field_type === "picklist") {
     return (
       <Select value={(value as string) || ""} onValueChange={onChange}>

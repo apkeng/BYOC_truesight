@@ -18,10 +18,20 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { OBJECTS, OBJECT_KEYS, isObjectKey } from "@/lib/objects";
 import { createClient } from "@/lib/supabase/client";
 import {
+  DATE_OPERATORS,
+  NUMBER_OPERATORS,
   SCHEDULABLE_TRIGGER_TYPES,
   VALUELESS_OPERATORS,
   WHEN_OPERATOR_LABELS,
+  readWhenOperator,
 } from "@/lib/types";
+import {
+  OPERATOR_ONLY_KEYS,
+  conditionError,
+  operatorHelp,
+  operatorsFor,
+  whenFieldKinds,
+} from "@/lib/when-conditions";
 import type { CustomField, EmailAlert, Workflow } from "@/lib/types";
 import { createWorkflow, updateWorkflow } from "./actions";
 import type {
@@ -29,6 +39,7 @@ import type {
   WorkflowTriggerType,
   WorkflowWhenMode,
   WorkflowWhenOperator,
+  WorkflowWhenUnit,
 } from "@/lib/types";
 
 const TRIGGER_LABELS: Record<WorkflowTriggerType, string> = {
@@ -160,6 +171,12 @@ export function WorkflowForm({
     [objectName, customFields]
   );
 
+  // Which fields can take the number / date comparisons.
+  const fieldKinds = useMemo(
+    () => whenFieldKinds(objectName, customFields),
+    [objectName, customFields]
+  );
+
   // The JSON textarea stays the source of truth; this select just reads and
   // rewrites the when_mode key so admins do not have to know it exists.
   const parsedConfig = useMemo(() => {
@@ -179,11 +196,22 @@ export function WorkflowForm({
     setConfig(JSON.stringify({ ...parsedConfig, when_mode: v }, null, 2));
   }
 
-  const rawOperator = parsedConfig?.when_operator;
-  const whenOperator: WorkflowWhenOperator =
-    rawOperator === "not_equals" || rawOperator === "is_blank" || rawOperator === "is_not_blank"
-      ? rawOperator
-      : "equals";
+  const whenOperator = readWhenOperator(parsedConfig?.when_operator);
+  const whenField = typeof parsedConfig?.when_field === "string" ? parsedConfig.when_field : "";
+  const whenFieldKind = fieldKinds[whenField];
+
+  const operatorOptions = operatorsFor(whenFieldKind, whenOperator);
+
+  const configText = (key: string) => {
+    const v = parsedConfig?.[key];
+    return v === undefined || v === null ? "" : String(v);
+  };
+  const whenUnit: WorkflowWhenUnit = parsedConfig?.when_unit === "months" ? "months" : "days";
+
+  function setConfigKey(key: string, value: unknown) {
+    if (!parsedConfig) return;
+    setConfig(JSON.stringify({ ...parsedConfig, [key]: value }, null, 2));
+  }
 
   /**
    * Rewrites when_operator in the JSON, and drops when_value along with it for
@@ -194,8 +222,19 @@ export function WorkflowForm({
   function onOperatorChange(v: WorkflowWhenOperator) {
     if (!parsedConfig) return;
     const next: Record<string, unknown> = { ...parsedConfig, when_operator: v };
+    for (const key of OPERATOR_ONLY_KEYS) delete next[key];
     if (VALUELESS_OPERATORS.includes(v)) delete next.when_value;
     else if (next.when_value === undefined) next.when_value = "";
+    // A text value left over from "equals" is meaningless as a number or a
+    // day count, so start those operators from an empty value instead.
+    if (
+      (NUMBER_OPERATORS.includes(v) || DATE_OPERATORS.includes(v)) &&
+      !Number.isFinite(Number(String(next.when_value).trim() || "x"))
+    ) {
+      next.when_value = "";
+    }
+    if (v === "between") next.when_value_to = "";
+    if (DATE_OPERATORS.includes(v)) next.when_unit = "days";
     setConfig(JSON.stringify(next, null, 2));
   }
 
@@ -249,15 +288,9 @@ export function WorkflowForm({
       toast.error('"Only when it changes" needs a when_field to watch');
       return;
     }
-    if (
-      parsed.when_operator !== undefined &&
-      !["equals", "not_equals", "is_blank", "is_not_blank"].includes(String(parsed.when_operator))
-    ) {
-      toast.error('when_operator must be "equals", "not_equals", "is_blank" or "is_not_blank"');
-      return;
-    }
-    if (VALUELESS_OPERATORS.includes(parsed.when_operator as WorkflowWhenOperator) && !parsed.when_field) {
-      toast.error(`"${WHEN_OPERATOR_LABELS[whenOperator]}" needs a when_field to check`);
+    const conditionProblem = conditionError(parsed, fieldKinds);
+    if (conditionProblem) {
+      toast.error(conditionProblem);
       return;
     }
     if (triggerType === "email_alert" && !parsed.email_alert_id) {
@@ -449,16 +482,70 @@ export function WorkflowForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="equals">{WHEN_OPERATOR_LABELS.equals}</SelectItem>
-                <SelectItem value="not_equals">{WHEN_OPERATOR_LABELS.not_equals}</SelectItem>
-                <SelectItem value="is_blank">{WHEN_OPERATOR_LABELS.is_blank}</SelectItem>
-                <SelectItem value="is_not_blank">{WHEN_OPERATOR_LABELS.is_not_blank}</SelectItem>
+                {operatorOptions.map((op) => (
+                  <SelectItem key={op} value={op}>
+                    {WHEN_OPERATOR_LABELS[op]}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
+            {NUMBER_OPERATORS.includes(whenOperator) && (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  className="w-36"
+                  aria-label={whenOperator === "between" ? "From" : "Compare against"}
+                  placeholder={whenOperator === "between" ? "From" : "k"}
+                  value={configText("when_value")}
+                  disabled={!parsedConfig}
+                  onChange={(e) => setConfigKey("when_value", e.target.value)}
+                />
+                {whenOperator === "between" && (
+                  <>
+                    <span className="text-sm text-muted-foreground">and</span>
+                    <Input
+                      type="number"
+                      className="w-36"
+                      aria-label="To"
+                      placeholder="To"
+                      value={configText("when_value_to")}
+                      disabled={!parsedConfig}
+                      onChange={(e) => setConfigKey("when_value_to", e.target.value)}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+            {DATE_OPERATORS.includes(whenOperator) && (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  className="w-28"
+                  aria-label="How many"
+                  placeholder="N"
+                  value={configText("when_value")}
+                  disabled={!parsedConfig}
+                  onChange={(e) => setConfigKey("when_value", e.target.value)}
+                />
+                <Select
+                  value={whenUnit}
+                  disabled={!parsedConfig}
+                  onValueChange={(v) => v && setConfigKey("when_unit", v)}
+                >
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="days">days</SelectItem>
+                    <SelectItem value="months">months</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">
-              {VALUELESS_OPERATORS.includes(whenOperator)
-                ? `Checks only whether when_field has been filled in — when_value is ignored and has been removed from the config. Empty text and an empty tag list both count as blank; 0 does not.`
-                : `Compares when_field against when_value.`}
+              {operatorHelp(whenOperator, whenFieldKind)}
             </p>
           </div>
 
@@ -499,8 +586,8 @@ export function WorkflowForm({
               onChange={(e) => setConfig(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Runs after a create/update on the object when <code>when_field</code> equals{" "}
-              <code>when_value</code> (omit both to run on every save). Use <code>{"{{field_name}}"}</code> in
+              Runs after a create/update on the object when <code>when_field</code> passes the
+              comparison above (omit <code>when_field</code> to run on every save). Use <code>{"{{field_name}}"}</code> in
               text values to substitute the record&apos;s field values.
             </p>
             <p className="text-xs text-muted-foreground">

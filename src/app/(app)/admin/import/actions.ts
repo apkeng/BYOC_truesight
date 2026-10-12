@@ -272,6 +272,12 @@ function coerceCustomValue(
         ? { value: n }
         : { value: null, warning: `"${raw}" is not a number for ${field.field_label}` };
     }
+    case "date": {
+      const s = toDateString(raw);
+      return s
+        ? { value: s }
+        : { value: null, warning: `Could not parse date "${raw}" for ${field.field_label}` };
+    }
     case "lookup": {
       const str = String(raw).trim();
       if (UUID_RE.test(str)) return { value: str };
