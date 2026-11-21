@@ -2,6 +2,7 @@ import { OBJECTS, type ObjectKey } from "./objects";
 import {
   DATE_OPERATORS,
   NUMBER_OPERATORS,
+  TEXT_MATCH_OPERATORS,
   WHEN_OPERATORS,
   WHEN_OPERATOR_LABELS,
   readWhenOperator,
@@ -18,7 +19,14 @@ import type { CustomField, WorkflowWhenOperator } from "./types";
 export type WhenFieldKind = "number" | "date";
 
 /** Operators every field gets, whatever its type. */
-const BASE_OPERATORS: WorkflowWhenOperator[] = ["equals", "not_equals", "is_blank", "is_not_blank"];
+const BASE_OPERATORS: WorkflowWhenOperator[] = [
+  "equals",
+  "not_equals",
+  "contains",
+  "is_any_of",
+  "is_blank",
+  "is_not_blank",
+];
 
 /** The number and date fields on an object, built-in and custom alike. */
 export function whenFieldKinds(
@@ -86,6 +94,15 @@ export function conditionError(
   if (operator !== "equals" && operator !== "not_equals" && !field) {
     return `"${label}" needs a field to check`;
   }
+  if (TEXT_MATCH_OPERATORS.includes(operator)) {
+    const v = String(config.when_value ?? "");
+    const empty = operator === "is_any_of" ? v.split(",").every((x) => x.trim() === "") : v.trim() === "";
+    if (empty) {
+      return operator === "is_any_of"
+        ? "Enter one or more values, separated by commas"
+        : "Enter the text to look for";
+    }
+  }
   if (NUMBER_OPERATORS.includes(operator)) {
     if (kinds[field] !== "number") return `"${label}" only works on a number field`;
     if (!isNumeric(config.when_value)) {
@@ -114,6 +131,12 @@ export function conditionError(
 export function operatorHelp(operator: WorkflowWhenOperator, kind: WhenFieldKind | undefined): string {
   if (operator === "is_blank" || operator === "is_not_blank") {
     return "Checks only whether the field has been filled in. Empty text and an empty tag list both count as blank; 0 does not.";
+  }
+  if (operator === "contains") {
+    return "Matches when the field's text includes this value anywhere. Ignores upper/lower case and extra spaces.";
+  }
+  if (operator === "is_any_of") {
+    return 'List values separated by commas, e.g. "Form 1 - HP Theme, Insta DM - Meta ad 1". Matches when the field has at least one of them. A field holding several comma-separated values (like "Website Inbound, Form 1 - HP Theme") counts each one. Ignores upper/lower case and extra spaces.';
   }
   if (operator === "between") {
     return "Matches when the number is between the two values, both ends included. A blank field never matches.";

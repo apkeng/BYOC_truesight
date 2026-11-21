@@ -67,6 +67,13 @@ export type WorkflowWhenMode = "always" | "on_change";
  *   equals / not_equals           - against when_value, as text
  *   is_blank / is_not_blank       - when_value is ignored
  *   greater_than ... less_or_equal - number fields, against when_value (k)
+ *   contains                      - the field's text includes when_value
+ *                                   (ignoring case and extra spaces)
+ *   is_any_of                     - when_value is a comma-separated list; the
+ *                                   field (itself split on commas, so
+ *                                   "Website Inbound, Form 1" counts as two
+ *                                   values) shares at least one entry with it,
+ *                                   ignoring case and extra spaces
  *   between                       - number fields, when_value..when_value_to,
  *                                   both ends inclusive
  *   within_last / within_next     - date fields: the date falls between today
@@ -76,6 +83,8 @@ export type WorkflowWhenMode = "always" | "on_change";
 export type WorkflowWhenOperator =
   | "equals"
   | "not_equals"
+  | "contains"
+  | "is_any_of"
   | "is_blank"
   | "is_not_blank"
   | "greater_than"
@@ -89,6 +98,8 @@ export type WorkflowWhenOperator =
 export const WHEN_OPERATORS: WorkflowWhenOperator[] = [
   "equals",
   "not_equals",
+  "contains",
+  "is_any_of",
   "is_blank",
   "is_not_blank",
   "greater_than",
@@ -102,6 +113,9 @@ export const WHEN_OPERATORS: WorkflowWhenOperator[] = [
 
 /** Operators that need no when_value, so the UI hides the value input. */
 export const VALUELESS_OPERATORS: WorkflowWhenOperator[] = ["is_blank", "is_not_blank"];
+
+/** Text operators that need a non-empty when_value to mean anything. */
+export const TEXT_MATCH_OPERATORS: WorkflowWhenOperator[] = ["contains", "is_any_of"];
 
 /** Operators that only make sense on a number field. */
 export const NUMBER_OPERATORS: WorkflowWhenOperator[] = [
@@ -121,6 +135,8 @@ export type WorkflowWhenUnit = "days" | "months";
 export const WHEN_OPERATOR_LABELS: Record<WorkflowWhenOperator, string> = {
   equals: "equals",
   not_equals: "does not equal",
+  contains: "contains",
+  is_any_of: "is any of",
   is_blank: "is blank",
   is_not_blank: "is not blank",
   greater_than: "is greater than",

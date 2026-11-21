@@ -138,10 +138,41 @@ function conditionHolds(
     case "within_last":
     case "within_next":
       return isWithin(operator, value, config, now);
+    case "contains":
+    case "is_any_of":
+      return matchText(operator, value, config.when_value);
   }
 
   const equal = String(value ?? "") === String(config.when_value ?? "");
   return operator === "not_equals" ? !equal : equal;
+}
+
+/** Case-insensitive, with runs of whitespace (and edge spaces) ignored. */
+function normalizeText(v: unknown): string {
+  return String(v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * A field's individual values: list fields (tags) as-is, and text split on
+ * commas, since multi-source text like "Website Inbound, Form 1" is stored
+ * as one comma-joined string.
+ */
+function splitValues(v: unknown): string[] {
+  const raw = Array.isArray(v) ? v.map((x) => String(x ?? "")) : String(v ?? "").split(",");
+  return raw.map(normalizeText).filter((x) => x !== "");
+}
+
+/** "contains" / "is_any_of". An empty when_value never matches. */
+function matchText(operator: "contains" | "is_any_of", value: unknown, wanted: unknown): boolean {
+  if (operator === "contains") {
+    const needle = normalizeText(wanted);
+    if (!needle) return false;
+    const hay = Array.isArray(value) ? value.map(normalizeText) : [normalizeText(value)];
+    return hay.some((h) => h.includes(needle));
+  }
+  const wantedSet = new Set(splitValues(wanted));
+  if (wantedSet.size === 0) return false;
+  return splitValues(value).some((x) => wantedSet.has(x));
 }
 
 /**

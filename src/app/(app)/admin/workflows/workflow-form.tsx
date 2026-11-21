@@ -33,6 +33,7 @@ import {
   whenFieldKinds,
 } from "@/lib/when-conditions";
 import type { CustomField, EmailAlert, Workflow } from "@/lib/types";
+import { istToUtc, utcToIst } from "@/lib/schedule";
 import { createWorkflow, updateWorkflow } from "./actions";
 import type {
   WorkflowRunMode,
@@ -124,7 +125,8 @@ export function WorkflowForm({
     schedule.schedule_type === "interval" ? "interval" : "daily"
   );
   const [atTime, setAtTime] = useState(
-    typeof schedule.at_time === "string" ? schedule.at_time : "09:00"
+    // Shown and edited in IST; stored as UTC (converted back on save).
+    utcToIst(typeof schedule.at_time === "string" ? schedule.at_time : "03:30")
   );
   const [intervalMinutes, setIntervalMinutes] = useState(
     Number(schedule.interval_minutes) || 60
@@ -324,7 +326,7 @@ export function WorkflowForm({
         schedule_config:
           scheduleType === "interval"
             ? { schedule_type: "interval", interval_minutes: intervalMinutes }
-            : { schedule_type: "daily", at_time: atTime },
+            : { schedule_type: "daily", at_time: istToUtc(atTime) },
       };
       if (workflow) {
         const result = await updateWorkflow(workflow.id, input);
@@ -413,7 +415,7 @@ export function WorkflowForm({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="daily">Daily at a time (UTC)</SelectItem>
+                    <SelectItem value="daily">Daily at a time (IST)</SelectItem>
                     <SelectItem value="interval">Every N minutes</SelectItem>
                   </SelectContent>
                 </Select>

@@ -8,7 +8,8 @@
  *
  * "daily" is UTC on purpose: the engine is driven by a cron that has no user
  * and therefore no timezone, and a schedule that silently shifts twice a year
- * is worse than one that is plainly labelled UTC in the UI.
+ * is worse than one that is plainly labelled. The editors show and take IST
+ * and convert (utcToIst / istToUtc below); what is stored is always UTC.
  */
 
 export interface ScheduleConfig {
@@ -41,6 +42,29 @@ export function isScheduleDue(
   return lastRun.getTime() < dueToday.getTime();
 }
 
+/**
+ * The admin UI shows and takes daily times in India Standard Time, while the
+ * stored at_time (and the engine above) stays UTC. IST is a fixed UTC+05:30
+ * with no daylight saving, so the conversion is a plain shift that never moves.
+ */
+const IST_OFFSET_MINUTES = 5 * 60 + 30;
+
+function shiftTime(hhmm: string, deltaMinutes: number): string {
+  const [h, m] = hhmm.split(":").map((v) => Number(v) || 0);
+  const total = (((h * 60 + m + deltaMinutes) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** Stored UTC "HH:MM" -> the IST "HH:MM" shown in the editors. */
+export function utcToIst(hhmm: string): string {
+  return shiftTime(hhmm, IST_OFFSET_MINUTES);
+}
+
+/** IST "HH:MM" typed in an editor -> the UTC "HH:MM" that gets stored. */
+export function istToUtc(hhmm: string): string {
+  return shiftTime(hhmm, -IST_OFFSET_MINUTES);
+}
+
 /** One-line plain-English schedule, for list rows and form hints. */
 export function describeSchedule(config: Record<string, unknown> | null | undefined): string {
   const c = (config || {}) as Record<string, unknown>;
@@ -50,5 +74,5 @@ export function describeSchedule(config: Record<string, unknown> | null | undefi
     if (minutes % 60 === 0) return `every ${minutes / 60} hour(s)`;
     return `every ${minutes} min`;
   }
-  return `daily at ${typeof c.at_time === "string" ? c.at_time : "09:00"} UTC`;
+  return `daily at ${utcToIst(typeof c.at_time === "string" ? c.at_time : "09:00")} IST`;
 }

@@ -54,6 +54,7 @@ import type {
   WorkflowWhenOperator,
   WorkflowWhenUnit,
 } from "@/lib/types";
+import { istToUtc, utcToIst } from "@/lib/schedule";
 
 type DelayUnit = "minutes" | "hours" | "days";
 
@@ -127,7 +128,8 @@ function triggerToRow(t: CadenceTrigger): TriggerRow {
     when_value_to: text(c.when_value_to),
     when_unit: c.when_unit === "months" ? "months" : "days",
     schedule_type: c.schedule_type === "interval" ? "interval" : "daily",
-    at_time: (c.at_time as string) || "09:00",
+    // Shown and edited in IST; stored as UTC (converted back on save).
+    at_time: utcToIst((c.at_time as string) || "03:30"),
     interval_minutes: Number(c.interval_minutes) || 60,
   };
 }
@@ -377,7 +379,7 @@ export function CadenceEditor({
         when_value_to: "",
         when_unit: "days",
         schedule_type: "daily",
-        at_time: "09:00",
+        at_time: "09:00", // IST - this is editor state, converted on save
         interval_minutes: 60,
       },
     ]);
@@ -452,7 +454,7 @@ export function CadenceEditor({
         t.trigger_type === "scheduled"
           ? {
               schedule_type: t.schedule_type,
-              at_time: t.at_time,
+              at_time: istToUtc(t.at_time),
               interval_minutes: t.interval_minutes,
               ...conditionConfig(t),
             }
@@ -607,7 +609,7 @@ export function CadenceEditor({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="daily">Daily at a time (UTC)</SelectItem>
+                      <SelectItem value="daily">Daily at a time (IST)</SelectItem>
                       <SelectItem value="interval">Every N minutes</SelectItem>
                     </SelectContent>
                   </Select>
