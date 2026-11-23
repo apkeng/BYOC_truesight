@@ -5,7 +5,6 @@ import { CadenceEditor } from "./cadence-editor";
 import type {
   Cadence,
   CadenceStep,
-  CadenceStepRun,
   CadenceTrigger,
   CustomField,
   EmailTemplate,
@@ -20,19 +19,34 @@ export default async function CadenceDetailPage({ params }: { params: Promise<{ 
     { data: steps },
     { data: triggers },
     { data: templates },
-    { data: runs },
+    { count: sentCount },
+    { count: failedCount },
+    { data: firstRun },
     { data: leadCustomFields },
   ] = await Promise.all([
       supabase.from("cadences").select("*").eq("id", id).single(),
       supabase.from("cadence_steps").select("*").eq("cadence_id", id).order("step_order", { ascending: true }),
       supabase.from("cadence_triggers").select("*").eq("cadence_id", id),
       supabase.from("email_templates").select("*").order("name", { ascending: true }),
+      // Delivery figures for the whole cadence. Counted in the database, not
+      // by fetching rows: a busy cadence has thousands of step runs.
       supabase
         .from("cadence_step_runs")
-        .select("*, cadence_enrollments!inner(cadence_id, lead_id)")
+        .select("id, cadence_enrollments!inner(cadence_id)", { count: "exact", head: true })
         .eq("cadence_enrollments.cadence_id", id)
-        .order("run_at", { ascending: false })
-        .limit(20),
+        .eq("status", "sent"),
+      supabase
+        .from("cadence_step_runs")
+        .select("id, cadence_enrollments!inner(cadence_id)", { count: "exact", head: true })
+        .eq("cadence_enrollments.cadence_id", id)
+        .eq("status", "failed"),
+      supabase
+        .from("cadence_step_runs")
+        .select("run_at, cadence_enrollments!inner(cadence_id)")
+        .eq("cadence_enrollments.cadence_id", id)
+        .order("run_at", { ascending: true })
+        .limit(1)
+        .maybeSingle(),
       // Trigger conditions are on lead fields; the editor needs the custom
       // ones' types to offer number / date comparisons on them.
       supabase.from("custom_fields").select("*").eq("object_name", "leads"),
@@ -49,7 +63,11 @@ export default async function CadenceDetailPage({ params }: { params: Promise<{ 
         initialSteps={(steps as CadenceStep[]) || []}
         initialTriggers={(triggers as CadenceTrigger[]) || []}
         templates={(templates as EmailTemplate[]) || []}
-        recentRuns={(runs as CadenceStepRun[]) || []}
+        delivery={{
+          sent: sentCount ?? 0,
+          failed: failedCount ?? 0,
+          startedAt: (firstRun as { run_at: string } | null)?.run_at ?? null,
+        }}
         leadCustomFields={(leadCustomFields as CustomField[]) || []}
       />
     </div>

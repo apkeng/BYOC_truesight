@@ -11,7 +11,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { OBJECTS } from "@/lib/objects";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Select,
   SelectContent,
@@ -46,7 +45,6 @@ import type {
   Cadence,
   CadenceStep,
   CustomField,
-  CadenceStepRun,
   CadenceTrigger,
   CadenceStepType,
   CadenceTriggerType,
@@ -307,14 +305,15 @@ export function CadenceEditor({
   initialSteps,
   initialTriggers,
   templates,
-  recentRuns,
+  delivery,
   leadCustomFields,
 }: {
   cadence: Cadence;
   initialSteps: CadenceStep[];
   initialTriggers: CadenceTrigger[];
   templates: EmailTemplate[];
-  recentRuns: CadenceStepRun[];
+  /** Whole-cadence email delivery figures; startedAt is the first step run. */
+  delivery: { sent: number; failed: number; startedAt: string | null };
   leadCustomFields: CustomField[];
 }) {
   const router = useRouter();
@@ -796,36 +795,39 @@ export function CadenceEditor({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Recent activity</CardTitle>
+          <CardTitle className="text-base">Email delivery</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Detail</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recentRuns.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={3} className="text-center text-muted-foreground">
-                    No activity yet — enroll leads with a trigger’s &quot;Enroll matching leads now&quot;, then click &quot;Run cadence engine now&quot; to deliver the first step.
-                  </TableCell>
-                </TableRow>
-              )}
-              {recentRuns.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {new Date(r.run_at).toLocaleString()}
-                  </TableCell>
-                  <TableCell className={r.status === "failed" ? "text-destructive" : ""}>{r.status}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{r.detail || "—"}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          {delivery.sent + delivery.failed === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No emails sent yet. Enroll leads with a trigger&rsquo;s &quot;Enroll matching leads now&quot;, then click &quot;Run cadence engine now&quot; to deliver the first step.
+            </p>
+          ) : (
+            <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div>
+                <dt className="text-xs text-muted-foreground">Sent</dt>
+                <dd className="text-2xl font-semibold tabular-nums">{delivery.sent.toLocaleString("en-IN")}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Failed</dt>
+                <dd className={`text-2xl font-semibold tabular-nums ${delivery.failed > 0 ? "text-destructive" : ""}`}>
+                  {delivery.failed.toLocaleString("en-IN")}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Sending started</dt>
+                <dd className="text-sm font-medium">
+                  {delivery.startedAt
+                    ? `${new Date(delivery.startedAt).toLocaleString("en-IN", {
+                        timeZone: "Asia/Kolkata",
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })} IST`
+                    : "—"}
+                </dd>
+              </div>
+            </dl>
+          )}
         </CardContent>
       </Card>
     </div>
