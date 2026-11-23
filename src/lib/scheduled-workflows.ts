@@ -24,6 +24,50 @@ export interface ScheduledWorkflowSummary {
   failed: number;
   /** Names of workflows whose match set was truncated by MAX_RECORDS_PER_RUN. */
   capped: string[];
+  /** Matches skipped because a lead-facing alert already reached them. */
+  skippedAlreadySent: number;
+}
+
+/**
+ * For a lead-facing email alert: ids of records whose lead already has a
+ * successful send of this alert's template in email_log. Returns null when
+ * the workflow isn't a lead-facing alert, so no dedupe applies.
+ *
+ * Throws if email_log can't be read. Sending blind would re-mail everyone, so
+ * the caller skips the run instead.
+ */
+async function alreadySentRecordIds(
+  supabase: SupabaseClient,
+  workflow: Workflow
+): Promise<Set<string> | null> {
+  if (workflow.trigger_type !== "email_alert") return null;
+  const alertId = (workflow.config || {}).email_alert_id as string | undefined;
+  if (!alertId) return null;
+
+  const { data: alert, error: alertError } = await supabase
+    .from("email_alerts")
+    .select("recipient_type, template_id")
+    .eq("id", alertId)
+    .maybeSingle();
+  if (alertError) throw new Error(`could not read email alert: ${alertError.message}`);
+  if (!alert || alert.recipient_type !== "lead" || !alert.template_id) return null;
+
+  const ids = new Set<string>();
+  const PAGE = 1000; // PostgREST's default row cap; page past it explicitly.
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("email_log")
+      .select("record_id")
+      .eq("template_id", alert.template_id)
+      .eq("object_name", workflow.object_name)
+      .eq("status", "sent")
+      .order("id")
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`could not read email_log: ${error.message}`);
+    for (const row of data || []) ids.add(row.record_id as string);
+    if (!data || data.length < PAGE) break;
+  }
+  return ids;
 }
 
 /**
@@ -37,12 +81,13 @@ export interface ScheduledWorkflowSummary {
  * made workflow notifications silently dead for non-admins before
  * 20260916000000_notifications_insert_workflow.sql.
  *
- * Deliberately stateless about which records it has already acted on: every due
- * run acts on every current match. A field_update is idempotent, and for
- * notifications and email alerts "tell me again while this is still true" is
- * the point of putting them on a daily schedule. Admins who want one-shot
- * behaviour should use an on_save workflow with when_mode "on_change" instead,
- * which fires exactly on the transition.
+ * Every due run acts on every current match, with one exception: a lead-facing
+ * email alert skips records whose lead already has a successful send of that
+ * template in email_log. Without that, a daily "webinar invite" alert re-mailed
+ * every matching lead each day. Failed sends (quota, bad address) are retried
+ * on the next run. field_update is idempotent, and notifications and
+ * internal-recipient alerts still repeat, because for those "tell me again
+ * while this is still true" is the point of a schedule.
  */
 export async function tickScheduledWorkflows(
   supabase: SupabaseClient
@@ -53,6 +98,7 @@ export async function tickScheduledWorkflows(
     actionsRun: 0,
     failed: 0,
     capped: [],
+    skippedAlreadySent: 0,
   };
   const now = new Date();
 
@@ -109,10 +155,28 @@ export async function tickScheduledWorkflows(
 
     // No `previous` argument: a sweep has no before-picture, so a condition
     // left on when_mode "on_change" degrades to "always" here (see matches()).
-    const matching = ((records || []) as Record<string, unknown>[]).filter((r) =>
+    const allMatching = ((records || []) as Record<string, unknown>[]).filter((r) =>
       matches(workflow.config || {}, r)
     );
-    summary.recordsMatched += matching.length;
+    summary.recordsMatched += allMatching.length;
+
+    let alreadySent: Set<string> | null;
+    try {
+      alreadySent = await alreadySentRecordIds(supabase, workflow);
+    } catch (err) {
+      console.error(
+        `[scheduled workflow ${workflow.id}] skipped, can't tell who was already emailed: ${
+          err instanceof Error ? err.message : err
+        }`
+      );
+      continue;
+    }
+    // Filtered before the cap, so a match set over MAX_RECORDS_PER_RUN works
+    // through in chunks across runs instead of re-sending the same first 500.
+    const matching = alreadySent
+      ? allMatching.filter((r) => !alreadySent.has(r.id as string))
+      : allMatching;
+    summary.skippedAlreadySent += allMatching.length - matching.length;
 
     const batch = matching.slice(0, MAX_RECORDS_PER_RUN);
     if (matching.length > batch.length) {

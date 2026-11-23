@@ -18,7 +18,22 @@ export interface ScheduleConfig {
   interval_minutes?: number;
 }
 
-/** Nothing has ever run it, or it last ran long enough ago to be due again. */
+/**
+ * How long after a daily slot a tick may still fire it.
+ *
+ * Cadences tick every 15 minutes and scheduled workflows every 5, so 30 minutes
+ * is always at least two ticks. Past the window the slot is skipped and the next
+ * chance is the same time tomorrow. Without a window, a daily schedule switched
+ * on at 21:00 for a 14:30 slot counted as "missed today" and fired at once, and
+ * that's how webinar email alerts went out seven hours early.
+ */
+export const DAILY_FIRE_WINDOW_MINUTES = 30;
+
+/**
+ * Interval: nothing has ever run it, or it last ran at least N minutes ago.
+ * Daily: today's slot has passed by no more than DAILY_FIRE_WINDOW_MINUTES and
+ * it has not run since that slot.
+ */
 export function isScheduleDue(
   config: Record<string, unknown> | null | undefined,
   lastRunAt: string | null,
@@ -38,6 +53,10 @@ export function isScheduleDue(
   const [h, m] = atTime.split(":").map((v) => Number(v) || 0);
   const dueToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m));
   if (now.getTime() < dueToday.getTime()) return false;
+  // Deliberately no catch-up for a missed slot. If the cron was down, or the
+  // schedule was only just switched on, firing hours late is worse than waiting
+  // for tomorrow, especially when the action sends email.
+  if (now.getTime() - dueToday.getTime() > DAILY_FIRE_WINDOW_MINUTES * 60000) return false;
   if (!lastRun) return true;
   return lastRun.getTime() < dueToday.getTime();
 }
