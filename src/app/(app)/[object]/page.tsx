@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Download, Plus, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { OBJECTS, isObjectKey, type ObjectKey } from "@/lib/objects";
 import { resolveLookupLabels } from "@/lib/lookup-labels";
@@ -11,7 +11,20 @@ import { EntityAvatar } from "@/components/entity-avatar";
 import { StatusPill } from "@/components/status-pill";
 import { OwnerAvatar } from "@/components/owner-avatar";
 import { StageFilterTabs } from "@/components/stage-filter-tabs";
-import { LeadFilter, type CreatedByFilter, type RangeFilter } from "@/components/lead-filter";
+import { LeadFilter } from "@/components/lead-filter";
+import { FieldFilter } from "@/components/field-filter";
+import {
+  describeCondition,
+  isFilterableObject,
+  serializeFilters,
+  type FilterField,
+} from "@/lib/record-filters";
+import {
+  applyListFilters,
+  listFilterParams,
+  loadFilterFields,
+  readListFilterState,
+} from "@/lib/record-query";
 import {
   RecordSelectionProvider,
   RecordRowCheckbox,
@@ -27,18 +40,20 @@ import {
 } from "@/components/ui/table";
 
 const PAGE_SIZE = 25;
-const RANGE_DAYS: Record<Exclude<RangeFilter, "all">, number> = { "1d": 1, "7d": 7, "30d": 30 };
-
-function sinceIso(range: Exclude<RangeFilter, "all">) {
-  return new Date(Date.now() - RANGE_DAYS[range] * 24 * 60 * 60 * 1000).toISOString();
-}
 
 export default async function ObjectListPage({
   params,
   searchParams,
 }: {
   params: Promise<{ object: string }>;
-  searchParams: Promise<{ q?: string; page?: string; status?: string; createdBy?: string; range?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    page?: string;
+    status?: string;
+    createdBy?: string;
+    range?: string;
+    filters?: string;
+  }>;
 }) {
   const { object } = await params;
   if (!isObjectKey(object)) notFound();
@@ -46,39 +61,30 @@ export default async function ObjectListPage({
   const def = OBJECTS[objectKey];
   const isLeads = objectKey === "leads";
 
-  const { q, page: pageParam, status, createdBy: createdByParam, range: rangeParam } = await searchParams;
-  const page = Math.max(1, Number(pageParam) || 1);
+  const sp = await searchParams;
+  const page = Math.max(1, Number(sp.page) || 1);
   const from = (page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
-
-  // Leads default to "created by me, last 24 hours" until the user picks a different filter.
-  const createdBy: CreatedByFilter = createdByParam === "all" ? "all" : "me";
-  const range: RangeFilter =
-    rangeParam === "7d" || rangeParam === "30d" || rangeParam === "all" ? rangeParam : "1d";
+  const filterable = isFilterableObject(objectKey);
 
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const searchField =
-    def.titleField ||
-    def.fields.find((f) => f.type === "text" && def.listColumns.includes(f.name))?.name;
+  const filterFields: FilterField[] = filterable
+    ? (await loadFilterFields(supabase, objectKey)).fields
+    : [];
+  const state = readListFilterState(sp, filterFields);
+  const { q, status, createdBy, range, conditions } = state;
 
-  function baseQuery() {
-    let query = supabase.from(def.table).select("*", { count: "exact" });
-    if (q && searchField) query = query.ilike(searchField, `%${q}%`);
-    if (status && def.statusField) query = query.eq(def.statusField, status);
-    if (isLeads) {
-      if (createdBy === "me" && user) query = query.eq("created_by", user.id);
-      if (range !== "all") {
-        query = query.gte("created_date", sinceIso(range));
-      }
-    }
-    return query;
-  }
-
-  const { data: rows, count } = await baseQuery()
+  const { data: rows, count } = await applyListFilters(
+    supabase.from(def.table).select("*", { count: "exact" }),
+    objectKey,
+    state,
+    filterFields,
+    user?.id
+  )
     .order("created_date", { ascending: false })
     .range(from, to);
 
@@ -93,9 +99,14 @@ export default async function ObjectListPage({
       .order("sort_order", { ascending: true });
     statusOptions = (values || []).map((v) => v.value as string);
 
-    let unfilteredQuery = supabase.from(def.table).select("id", { count: "exact", head: true });
-    if (q && searchField) unfilteredQuery = unfilteredQuery.ilike(searchField, `%${q}%`);
-    const { count: unfilteredCount } = await unfilteredQuery;
+    const { count: unfilteredCount } = await applyListFilters(
+      supabase.from(def.table).select("id", { count: "exact", head: true }),
+      objectKey,
+      state,
+      filterFields,
+      user?.id,
+      { skipStatus: true }
+    );
     totalCount = unfilteredCount || 0;
   }
 
@@ -118,16 +129,37 @@ export default async function ObjectListPage({
 
   const totalPages = Math.max(1, Math.ceil((count || 0) / PAGE_SIZE));
   const qsBase = (p: number) => {
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (status) params.set("status", status);
-    if (isLeads) {
-      params.set("createdBy", createdBy);
-      params.set("range", range);
-    }
+    const params = listFilterParams(objectKey, state);
     params.set("page", String(p));
     return `/${objectKey}?${params.toString()}`;
   };
+
+  // Params the status pills must carry over (they set q and status themselves).
+  const pillParams = listFilterParams(objectKey, state);
+  pillParams.delete("status");
+  pillParams.delete("q");
+
+  const exportHref = `/api/export/${objectKey}?${listFilterParams(objectKey, state).toString()}`;
+
+  // Chip labels for lookup conditions (they store record ids).
+  const conditionLookupLabels: Record<string, string> = {};
+  for (const c of conditions) {
+    const field = filterFields.find((f) => f.name === c.field);
+    if (field?.kind !== "lookup" || !field.lookupTable || !c.values?.length) continue;
+    const labelField = field.lookupLabelField || "name";
+    const { data } = await supabase
+      .from(field.lookupTable)
+      .select(`id, ${labelField}`)
+      .in("id", c.values);
+    for (const r of (data as unknown as Record<string, unknown>[]) || []) {
+      conditionLookupLabels[r.id as string] = (r[labelField] as string) || "(untitled)";
+    }
+  }
+
+  function hrefWithConditions(next: typeof conditions) {
+    const qs = listFilterParams(objectKey, { ...state, conditions: next }).toString();
+    return qs ? `/${objectKey}?${qs}` : `/${objectKey}`;
+  }
 
   function cellDisplay(row: Record<string, unknown>, col: string) {
     const field = def.fields.find((f) => f.name === col);
@@ -159,13 +191,55 @@ export default async function ObjectListPage({
             options={statusOptions}
             filteredCount={count || 0}
             totalCount={totalCount}
+            extraParams={pillParams.toString()}
           />
         </div>
       )}
 
-      {isLeads && (
-        <div className="mb-4 flex items-center justify-end">
-          <LeadFilter basePath={`/${objectKey}`} q={q} createdBy={createdBy} range={range} />
+      {(filterable || isLeads) && (
+        <div className="mb-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {filterable && <FieldFilter fields={filterFields} conditions={conditions} />}
+            {isLeads && <LeadFilter createdBy={createdBy} range={range} />}
+            {filterable &&
+              (count ? (
+                <a href={exportHref} download>
+                  <Button variant="outline" size="sm" className="gap-1.5">
+                    <Download className="size-3.5" />
+                    Export CSV ({count})
+                  </Button>
+                </a>
+              ) : (
+                <Button variant="outline" size="sm" className="gap-1.5" disabled>
+                  <Download className="size-3.5" />
+                  Export CSV
+                </Button>
+              ))}
+          </div>
+          {conditions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {conditions.map((c, i) => {
+                const field = filterFields.find((f) => f.name === c.field)!;
+                return (
+                  <Link
+                    key={`${i}-${serializeFilters([c])}`}
+                    href={hrefWithConditions(conditions.filter((_, j) => j !== i))}
+                    className="flex items-center gap-1.5 rounded-full border border-border bg-muted px-3 py-1 text-xs hover:bg-muted/70"
+                    title="Remove this filter"
+                  >
+                    {describeCondition(c, field, conditionLookupLabels)}
+                    <X className="size-3" />
+                  </Link>
+                );
+              })}
+              <Link
+                href={hrefWithConditions([])}
+                className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              >
+                Clear field filters
+              </Link>
+            </div>
+          )}
         </div>
       )}
 
@@ -205,7 +279,7 @@ export default async function ObjectListPage({
                   colSpan={def.listColumns.length + 1}
                   className="py-10 text-center text-muted-foreground"
                 >
-                  No records yet.
+                  {conditions.length > 0 ? "No records match these filters." : "No records yet."}
                 </TableCell>
               </TableRow>
             )}

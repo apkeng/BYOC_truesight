@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ListFilter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -18,27 +18,26 @@ const RANGE_OPTIONS: { value: RangeFilter; label: string }[] = [
 ];
 
 export function LeadFilter({
-  basePath,
-  q,
   createdBy,
   range,
 }: {
-  basePath: string;
-  q?: string;
   createdBy: CreatedByFilter;
   range: RangeFilter;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const [draftCreatedBy, setDraftCreatedBy] = useState<CreatedByFilter>(createdBy);
   const [draftRange, setDraftRange] = useState<RangeFilter>(range);
 
   function apply() {
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
+    // keep search, status and field filters; only the lead filters change
+    const params = new URLSearchParams(searchParams.toString());
     params.set("createdBy", draftCreatedBy);
     params.set("range", draftRange);
-    router.push(`${basePath}?${params.toString()}`);
+    params.delete("page");
+    router.push(`${pathname}?${params.toString()}`);
     setOpen(false);
   }
 

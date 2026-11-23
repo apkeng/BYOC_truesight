@@ -8,6 +8,7 @@ export function StageFilterTabs({
   options,
   filteredCount,
   totalCount,
+  extraParams,
 }: {
   basePath: string;
   q?: string;
@@ -15,9 +16,11 @@ export function StageFilterTabs({
   options: string[];
   filteredCount: number;
   totalCount: number;
+  /** other list filters (field filters, lead created-by/range) to carry over */
+  extraParams?: string;
 }) {
   function href(status?: string) {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams(extraParams);
     if (q) params.set("q", q);
     if (status) params.set("status", status);
     const qs = params.toString();
