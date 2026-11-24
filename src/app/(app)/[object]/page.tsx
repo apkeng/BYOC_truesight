@@ -250,8 +250,8 @@ export default async function ObjectListPage({
         lists={userLists}
       >
       <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <Table>
-          <TableHeader>
+        <Table containerClassName="max-h-[calc(100dvh-16rem)] overflow-y-auto">
+          <TableHeader className="sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--color-border)]">
             <TableRow className="hover:bg-transparent">
               <TableHead className="h-11 w-10 pl-4">
                 <RecordSelectAllCheckbox ids={(rows as Record<string, unknown>[] | null)?.map((r) => r.id as string) || []} />
